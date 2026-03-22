@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "SER Backend (Express API)",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "port": 3001
+    },
+    {
+      "name": "SER Frontend (Vite React)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "3000"],
+      "port": 3000
+    }
+  ]
+}

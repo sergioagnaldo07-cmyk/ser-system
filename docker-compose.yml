@@ -1,0 +1,62 @@
+# Sistema SER — Evolution API (WhatsApp)
+# Para iniciar: docker compose up -d
+# Para parar:   docker compose down
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:latest
+    container_name: ser-evolution-api
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8084
+      - SERVER_URL=http://localhost:8084
+      - AUTHENTICATION_API_KEY=SER_EVOLUTION_KEY_2026
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://postgres:ser2026@ser-postgres:5432/evolution
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://ser-redis:6379/0
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_REDIS_SAVE_INSTANCES=true
+      - CACHE_LOCAL_ENABLED=false
+      - LOG_LEVEL=ERROR,WARN,DEBUG,INFO,LOG,VERBOSE,DARK,WEBHOOKS
+      - LOG_BAILEYS=error
+      - LOG_COLOR=true
+      - QRCODE_LIMIT=30
+      - DEL_INSTANCE=false
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - evolution_instances:/evolution/instances
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: ser-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=ser2026
+      - POSTGRES_DB=evolution
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: ser-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 100mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6380:6379"
+
+volumes:
+  postgres_data:
+  evolution_instances:
+  redis_data:
