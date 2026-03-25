@@ -4,11 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node server.js",
     "dev": "concurrently \"node server.js\" \"vite\"",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "migrate:supabase": "node scripts/migrate-local-to-supabase.mjs",
+    "check:env": "node scripts/check-env.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.54.0",
     "@anthropic-ai/sdk": "^0.39.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

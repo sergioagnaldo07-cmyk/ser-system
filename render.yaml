@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ser-backend
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /api/health
+    disk:
+      name: ser-persist
+      mountPath: /app/persist
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3101
+      - key: FRONTEND_PORT
+        value: 3100
+      - key: SER_STORAGE_MODE
+        value: auto
+      - key: SER_DATA_DIR
+        value: /app/persist/data
+      - key: WHATSAPP_AUTH_PATH
+        value: /app/persist/whatsapp_auth
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/chromium

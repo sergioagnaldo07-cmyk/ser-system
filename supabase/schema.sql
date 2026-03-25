@@ -1,0 +1,51 @@
+-- Sistema SER - schema para storage no Supabase
+
+create extension if not exists pgcrypto;
+
+create table if not exists public.ser_tasks (
+  id text primary key,
+  title text not null,
+  detail text,
+  frente text not null,
+  type text not null,
+  date date not null,
+  start_time time,
+  estimated_time integer not null default 30,
+  steps jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  completed_at timestamptz,
+  follow_up_daily boolean not null default false,
+  follow_up_time time,
+  follow_up_client text,
+  follow_up_subject text,
+  source text not null default 'app'
+);
+
+create index if not exists ser_tasks_date_idx on public.ser_tasks (date);
+create index if not exists ser_tasks_frente_idx on public.ser_tasks (frente);
+create index if not exists ser_tasks_completed_idx on public.ser_tasks (completed_at);
+create index if not exists ser_tasks_updated_idx on public.ser_tasks (updated_at desc);
+
+create table if not exists public.ser_usage_events (
+  id text primary key,
+  ts timestamptz not null default now(),
+  source text,
+  endpoint text,
+  usage_kind text,
+  model text,
+  input_tokens integer not null default 0,
+  output_tokens integer not null default 0,
+  total_tokens integer not null default 0,
+  audio_minutes numeric(12,6) not null default 0,
+  usd numeric(12,6) not null default 0,
+  mime_type text,
+  duration_seconds numeric(12,3) not null default 0,
+  metadata jsonb
+);
+
+create index if not exists ser_usage_events_ts_idx on public.ser_usage_events (ts desc);
+create index if not exists ser_usage_events_kind_idx on public.ser_usage_events (usage_kind);
+
+alter table public.ser_tasks disable row level security;
+alter table public.ser_usage_events disable row level security;

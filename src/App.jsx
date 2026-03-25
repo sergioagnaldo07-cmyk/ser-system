@@ -7,14 +7,33 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const FRENTES = { taka: "Estúdio Taka", haldan: "Haldan", pessoal: "Pessoal" };
 const FRENTE_COLORS = {
-  taka:    { primary: "#B5302F", light: "#FCEBEB", medium: "#E24B4A", dark: "#791F1F", accent: "#F09595" },
-  haldan:  { primary: "#0F6E56", light: "#E1F5EE", medium: "#1D9E75", dark: "#085041", accent: "#5DCAA5" },
-  pessoal: { primary: "#534AB7", light: "#EEEDFE", medium: "#7F77DD", dark: "#3C3489", accent: "#AFA9EC" },
+  taka:    { primary: "#DE5A4A", light: "#FFF3F1", medium: "#F07A6D", dark: "#8F2F24", accent: "#F8B6AE" },
+  haldan:  { primary: "#1A9A78", light: "#EBFAF5", medium: "#2BB792", dark: "#0F5F4A", accent: "#9DE3CF" },
+  pessoal: { primary: "#626BE8", light: "#F0F1FF", medium: "#8189FF", dark: "#3F46B4", accent: "#BDC1FF" },
 };
 const FC = (f) => FRENTE_COLORS[f]?.primary || "#888";
 const FBG = (f) => FRENTE_COLORS[f]?.light || "#F1EFE8";
 const FDK = (f) => FRENTE_COLORS[f]?.dark || "#555";
 const FAC = (f) => FRENTE_COLORS[f]?.accent || "#ccc";
+
+const UI = {
+  ink: "#0E172A",
+  inkSoft: "#334155",
+  muted: "#6B7280",
+  line: "#D8E2EE",
+  lineSoft: "#E8EEF5",
+  pageTop: "#EEF3FA",
+  pageBottom: "#F7FAFE",
+  surface: "#FFFFFF",
+  surfaceSoft: "#F6F9FD",
+  darkA: "#0C1A2F",
+  darkB: "#162A4A",
+  success: "#1A9A78",
+  warning: "#D1841D",
+  shadowLg: "0 18px 40px rgba(15, 23, 42, 0.12)",
+  shadowMd: "0 10px 24px rgba(15, 23, 42, 0.10)",
+  shadowSm: "0 4px 12px rgba(15, 23, 42, 0.08)",
+};
 
 const TASK_TYPES = ["Reunião","SEO","WordPress","Conteúdo","Follow-up","Proposta","Gestão equipe","Alimentação","Esporte","Casa","Outro"];
 const TYPE_ICONS = { "Reunião":"📅","SEO":"🔍","WordPress":"🌐","Conteúdo":"✏️","Follow-up":"📩","Proposta":"📊","Gestão equipe":"👥","Alimentação":"🍳","Esporte":"💪","Casa":"🏠","Outro":"📌" };
@@ -57,8 +76,24 @@ function injectStyles() {
     .ser-scaleIn { animation: ser-scaleIn 0.2s ease-out both; }
     .ser-pulse { animation: ser-pulse 1.5s ease-in-out infinite; }
     * { box-sizing:border-box; margin:0; padding:0; }
-    body { font-family:'SF Pro Display','Helvetica Neue',-apple-system,sans-serif; background:#F6F5F0; overflow-x:hidden; }
+    body {
+      font-family:'Sora','Manrope','Avenir Next','Segoe UI',sans-serif;
+      background:linear-gradient(180deg, ${UI.pageTop} 0%, ${UI.pageBottom} 100%);
+      color:${UI.ink};
+      overflow-x:hidden;
+      text-rendering:optimizeLegibility;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
     input,textarea,select,button { font-family:inherit; }
+    button { transition:transform 0.16s ease, box-shadow 0.2s ease, background-color 0.2s ease, border-color 0.2s ease; }
+    @media (hover:hover) and (pointer:fine) {
+      button:hover { transform:translateY(-1px); }
+    }
+    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible {
+      outline:2px solid #8EA7FF;
+      outline-offset:2px;
+    }
     ::-webkit-scrollbar { width:4px; }
     ::-webkit-scrollbar-thumb { background:#d3d1c7; border-radius:4px; }
   `;
@@ -103,7 +138,14 @@ const SoundEngine = {
 
 // ─── Utils ───
 function genId() { return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
-function today() { return new Date().toISOString().slice(0,10); }
+function toLocalISO(dateObj = new Date()) {
+  const d = new Date(dateObj);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+function today() { return toLocalISO(new Date()); }
 
 function fmtDate(d) { return new Date(d+"T12:00:00").toLocaleDateString("pt-BR",{weekday:"short",day:"2-digit",month:"2-digit"}); }
 function fmtDateFull(d) { return new Date(d+"T12:00:00").toLocaleDateString("pt-BR",{weekday:"long",day:"2-digit",month:"long"}); }
@@ -113,7 +155,7 @@ function fmtWeekday(d) { return new Date(d+"T12:00:00").toLocaleDateString("pt-B
 function addDays(dateStr, n) {
   const d = new Date(dateStr+"T12:00:00");
   d.setDate(d.getDate()+n);
-  return d.toISOString().slice(0,10);
+  return toLocalISO(d);
 }
 
 function getWeekDays(centerDate) {
@@ -122,7 +164,7 @@ function getWeekDays(centerDate) {
   const mon = new Date(d); mon.setDate(d.getDate() - ((dow+6)%7));
   return Array.from({length:7},(_,i)=>{
     const dd = new Date(mon); dd.setDate(mon.getDate()+i);
-    return dd.toISOString().slice(0,10);
+    return toLocalISO(dd);
   });
 }
 
@@ -136,33 +178,105 @@ function getCurrentBlock() {
 
 // ─── Date parsing from natural language ───
 function parseDateFromText(text) {
-  const lower = text.toLowerCase();
+  const raw = String(text || "");
+  const lower = raw.toLowerCase();
+  const normalized = lower
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s/:-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const t = today();
-  const DAYS = {"domingo":0,"segunda":1,"terça":2,"terca":2,"quarta":3,"quinta":4,"sexta":5,"sábado":6,"sabado":6};
+  const now = new Date(t + "T12:00:00");
+  const candidates = [];
+  const DAYS = { domingo:0, segunda:1, terca:2, quarta:3, quinta:4, sexta:5, sabado:6 };
 
-  if(/\bhoje\b/.test(lower)) return t;
-  if(/\bamanh[aã]\b/.test(lower)) return addDays(t,1);
-  if(/\bdepois de amanh[aã]\b/.test(lower)) return addDays(t,2);
-  if(/\bsemana que vem\b|\bpróxima semana\b|\bproxima semana\b/.test(lower)) return addDays(t, 7-new Date().getDay()+1);
+  const addCandidate = (date, index, kind) => {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if (isNaN(new Date(date + "T12:00:00").getTime())) return;
+    candidates.push({ date, index: Number(index) || 0, kind });
+  };
 
-  for(const [name,dow] of Object.entries(DAYS)) {
-    if(lower.includes(name)) {
-      const curr = new Date().getDay();
+  for (const m of normalized.matchAll(/\bdepois de amanha\b/g)) addCandidate(addDays(t, 2), m.index, "relative");
+  for (const m of normalized.matchAll(/\bamanha\b/g)) addCandidate(addDays(t, 1), m.index, "relative");
+  for (const m of normalized.matchAll(/\bhoje\b/g)) {
+    const idx = Number(m.index || 0);
+    const negWindow = normalized.slice(Math.max(0, idx - 26), idx + 5);
+    if (/\bnao\b[^.]{0,24}\bhoje\b/.test(negWindow)) continue;
+    addCandidate(t, idx, "today");
+  }
+
+  for (const m of normalized.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g)) {
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    let year = m[3] ? parseInt(m[3], 10) : now.getFullYear();
+    if (m[3] && String(m[3]).length === 2) year += 2000;
+    const d = new Date(year, month - 1, day);
+    if (!isNaN(d.getTime())) addCandidate(toLocalISO(d), m.index, "ddmm");
+  }
+
+  for (const m of normalized.matchAll(/\bdia\s+(\d{1,2})\b/g)) {
+    const wantedDay = parseInt(m[1], 10);
+    let year = now.getFullYear();
+    let month = now.getMonth() + 1;
+    if (wantedDay < now.getDate()) {
+      month += 1;
+      if (month > 12) {
+        month = 1;
+        year += 1;
+      }
+    }
+    const iso = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(wantedDay).padStart(2, "0")}`;
+    addCandidate(iso, m.index, "day_only");
+  }
+
+  const weekdayPatterns = [
+    { regex: /\bdomingo\b/g, key: "domingo" },
+    { regex: /\bsegunda(?:\s+feira)?\b/g, key: "segunda" },
+    { regex: /\bterca(?:\s+feira)?\b/g, key: "terca" },
+    { regex: /\bquarta(?:\s+feira)?\b/g, key: "quarta" },
+    { regex: /\bquinta(?:\s+feira)?\b/g, key: "quinta" },
+    { regex: /\bsexta(?:\s+feira)?\b/g, key: "sexta" },
+    { regex: /\bsabado(?:\s+feira)?\b/g, key: "sabado" },
+  ];
+
+  const globalNextWeek = /\bsemana que vem\b|\bproxima semana\b/.test(normalized);
+  for (const p of weekdayPatterns) {
+    for (const m of normalized.matchAll(p.regex)) {
+      const idx = Number(m.index || 0);
+      const around = normalized.slice(Math.max(0, idx - 24), idx + 40);
+      const localNextWeek = /\b(semana que vem|proxima semana|que vem)\b/.test(around) || globalNextWeek;
+      const curr = now.getDay();
+      const dow = DAYS[p.key];
       let diff = dow - curr;
-      if(diff <= 0) diff += 7;
-      return addDays(t, diff);
+      if (diff <= 0) diff += 7;
+      if (localNextWeek) diff += 7;
+      addCandidate(addDays(t, diff), idx, "weekday");
     }
   }
 
-  // Try dd/mm format
-  const ddmm = lower.match(/(\d{1,2})\/(\d{1,2})/);
-  if(ddmm) {
-    const year = new Date().getFullYear();
-    const d = new Date(year, parseInt(ddmm[2])-1, parseInt(ddmm[1]));
-    if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+  const weekPhrase = normalized.match(/\bsemana que vem\b|\bproxima semana\b/);
+  if (weekPhrase && !candidates.some(c => c.kind === "weekday")) {
+    const mondayDelta = (8 - now.getDay()) % 7 || 7;
+    addCandidate(addDays(t, mondayDelta), weekPhrase.index, "week_next");
   }
 
-  return t; // default today
+  if (candidates.length === 0) return t;
+
+  const hasNonToday = candidates.some(c => c.date !== t);
+  const scored = candidates.map(c => {
+    const before = normalized.slice(Math.max(0, c.index - 20), c.index);
+    const hasTargetPrep = /\b(para|pra|pro|na|no)\s*$/.test(before);
+    let score = c.index;
+    if (hasTargetPrep) score += 10000;
+    if (hasNonToday && c.date === t) score -= 700;
+    if (c.kind === "weekday") score += 150;
+    if (c.kind === "ddmm" || c.kind === "day_only") score += 100;
+    return { ...c, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].date || t;
 }
 
 function getDateLabel(dateStr) {
@@ -174,6 +288,41 @@ function getDateLabel(dateStr) {
 }
 
 // ─── Storage ───
+const API_BASE_URL = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/,"");
+const API_ADMIN_TOKEN = String(import.meta.env.VITE_SER_ADMIN_TOKEN || "").trim();
+const apiUrl = (path="") => API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+const apiFetch = (path, options={}) => {
+  const method = String(options.method || "GET").toUpperCase();
+  const finalHeaders = {
+    ...(options.headers || {}),
+  };
+  if (API_ADMIN_TOKEN) {
+    finalHeaders["x-ser-admin-token"] = API_ADMIN_TOKEN;
+  }
+  const finalOptions = {
+    ...options,
+    headers: finalHeaders,
+  };
+  if (method === "GET" && finalOptions.cache === undefined) {
+    finalOptions.cache = "no-store";
+  }
+  return fetch(apiUrl(path), {
+    ...finalOptions,
+  });
+};
+
+async function extractApiError(response) {
+  if (!response) return "Erro de conexão.";
+  const fallback = `Erro ${response.status}`;
+  try {
+    const data = await response.json();
+    if (typeof data?.error === "string" && data.error.trim()) return data.error.trim();
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const STORAGE_KEY = "ser_system_data";
 const STREAK_KEY = "ser_streak";
 const ONBOARDING_KEY = "ser_onboarding_done";
@@ -186,6 +335,96 @@ function updateStreak() {
   const y=addDays(t,-1);
   const ns={count:s.lastDate===y?s.count+1:1, lastDate:t};
   try{localStorage.setItem(STREAK_KEY,JSON.stringify(ns));}catch(e){} return ns;
+}
+
+function sortTasksList(tasks = []) {
+  return [...tasks].sort((a, b) => {
+    if ((a.date || "") !== (b.date || "")) return (a.date || "").localeCompare(b.date || "");
+    const ta = a.startTime || "99:99";
+    const tb = b.startTime || "99:99";
+    if (ta !== tb) return ta.localeCompare(tb);
+    return String(a.title || "").localeCompare(String(b.title || ""), "pt-BR");
+  });
+}
+
+function normalizeTaskShape(task, sops = DEFAULT_SOPS) {
+  if (!task || typeof task !== "object") return null;
+  const safeType = TASK_TYPES.includes(task.type) ? task.type : "Outro";
+  const safeFrente = FRENTES[task.frente] ? task.frente : "pessoal";
+  const fallbackSteps = (sops[safeType]?.steps || sops["Outro"]?.steps || []).map(s => ({ ...s, done: false }));
+  const steps = Array.isArray(task.steps)
+    ? task.steps
+      .map(step => ({
+        text: String(step?.text || "").trim(),
+        time: Number.isFinite(Number(step?.time)) ? Number(step.time) : 0,
+        done: Boolean(step?.done),
+      }))
+      .filter(step => step.text)
+    : fallbackSteps;
+  const estimatedFromSteps = steps.reduce((sum, step) => sum + (step.time || 0), 0);
+  const estimatedRaw = Number(task.estimatedTime);
+  const estimatedTime = Number.isFinite(estimatedRaw) && estimatedRaw > 0 ? estimatedRaw : (estimatedFromSteps || 30);
+
+  return {
+    ...task,
+    id: task.id || genId(),
+    title: String(task.title || "Nova tarefa").trim(),
+    detail: task.detail ? String(task.detail) : null,
+    frente: safeFrente,
+    type: safeType,
+    date: typeof task.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(task.date) ? task.date : today(),
+    startTime: typeof task.startTime === "string" && /^\d{2}:\d{2}$/.test(task.startTime) ? task.startTime : null,
+    followUpDaily: Boolean(task.followUpDaily),
+    followUpTime: typeof task.followUpTime === "string" && /^\d{2}:\d{2}$/.test(task.followUpTime) ? task.followUpTime : null,
+    followUpClient: task.followUpClient ? String(task.followUpClient) : null,
+    followUpSubject: task.followUpSubject ? String(task.followUpSubject) : null,
+    steps,
+    estimatedTime,
+    createdAt: task.createdAt || new Date().toISOString(),
+    updatedAt: task.updatedAt || task.createdAt || new Date().toISOString(),
+    completedAt: task.completedAt || null,
+  };
+}
+
+function serializeTasksForSync(tasks = []) {
+  const sorted = sortTasksList(tasks).map(task => ({
+    id: task.id,
+    title: task.title,
+    detail: task.detail || null,
+    frente: task.frente,
+    type: task.type,
+    date: task.date,
+    startTime: task.startTime || null,
+    followUpDaily: Boolean(task.followUpDaily),
+    followUpTime: task.followUpTime || null,
+    followUpClient: task.followUpClient || null,
+    followUpSubject: task.followUpSubject || null,
+    estimatedTime: task.estimatedTime || 0,
+    completedAt: task.completedAt || null,
+    createdAt: task.createdAt || null,
+    updatedAt: task.updatedAt || null,
+    steps: (task.steps || []).map(step => ({
+      text: step.text,
+      time: step.time || 0,
+      done: Boolean(step.done),
+    })),
+  }));
+  return JSON.stringify(sorted);
+}
+
+function splitTasksByCompletion(tasks = [], sops = DEFAULT_SOPS) {
+  const normalized = (tasks || []).map(task => normalizeTaskShape(task, sops)).filter(Boolean);
+  const active = normalized.filter(task => !task.completedAt);
+  const completed = normalized.filter(task => task.completedAt);
+  return { active, completed };
+}
+
+function sortHistoryList(tasks = []) {
+  return [...tasks].sort((a, b) => {
+    const ta = new Date(a.completedAt || a.updatedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.completedAt || b.updatedAt || b.createdAt || 0).getTime();
+    return tb - ta;
+  });
 }
 
 // ─── Hooks ───
@@ -214,8 +453,8 @@ function TypePill({type}) { return <span style={{display:"inline-flex",alignItem
 
 function Toast({message,onUndo,onClose}) {
   useEffect(()=>{const t=setTimeout(onClose,4000);return()=>clearTimeout(t);},[onClose]);
-  return <div className="ser-slideUp" style={{position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",background:"#1A1A18",color:"#fff",padding:"12px 20px",borderRadius:12,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:12,boxShadow:"0 8px 30px rgba(0,0,0,0.25)",zIndex:200}}>
-    {message}{onUndo&&<button onClick={onUndo} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",padding:"4px 12px",borderRadius:6,fontSize:12,cursor:"pointer",fontWeight:600}}>Desfazer</button>}
+  return <div className="ser-slideUp" style={{position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",background:"rgba(12,26,47,0.92)",backdropFilter:"blur(8px)",color:"#fff",padding:"12px 20px",borderRadius:14,fontSize:13,fontWeight:500,display:"flex",alignItems:"center",gap:12,boxShadow:UI.shadowLg,border:"1px solid rgba(255,255,255,0.16)",zIndex:200}}>
+    {message}{onUndo&&<button onClick={onUndo} style={{background:"rgba(255,255,255,0.18)",border:"1px solid rgba(255,255,255,0.24)",color:"#fff",padding:"5px 12px",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600}}>Desfazer</button>}
   </div>;
 }
 
@@ -244,7 +483,7 @@ function DailyProgressRing({done,total}) {
 function PomodoroCompact({pom,totalEstimate}) {
   const target=Math.max(1,Math.ceil((totalEstimate||50)/25));
   const col=pom.mode==="work"?"#5DCAA5":"#AFA9EC";
-  return <div style={{background:"#1A1A18",borderRadius:16,padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,minHeight:140}}>
+  return <div style={{background:`linear-gradient(165deg, ${UI.darkA} 0%, ${UI.darkB} 100%)`,borderRadius:18,padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,minHeight:140,border:"1px solid rgba(255,255,255,0.08)",boxShadow:UI.shadowLg}}>
     <div style={{fontSize:9,fontWeight:600,color:"rgba(255,255,255,0.35)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:8}}>{pom.mode==="work"?"Foco":"Pausa"}</div>
     <div style={{position:"relative",display:"inline-block"}}>
       <CircularProgress progress={pom.progress} size={100} stroke={4} color={col}/>
@@ -269,8 +508,8 @@ function StatsCompact({tasks,dateStr}) {
   const est=dt.filter(t=>!t.completedAt).reduce((s,t)=>s+(t.estimatedTime||0),0);
   return <div style={{display:"flex",flexDirection:"column",gap:6,flex:1}}>
     {[{l:"Pendentes",v:pending,c:"#BA7517"},{l:"Concluídas",v:done,c:"#0F6E56"},{l:"Estimado",v:`${est}m`,c:"#534AB7"}].map(s=>
-      <div key={s.l} style={{background:"#fff",borderRadius:12,padding:"10px 14px",border:"1px solid #E8E6DF",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span style={{fontSize:12,color:"#888",fontWeight:500}}>{s.l}</span>
+      <div key={s.l} style={{background:`linear-gradient(180deg, ${UI.surface} 0%, ${UI.surfaceSoft} 100%)`,borderRadius:14,padding:"10px 14px",border:`1px solid ${UI.lineSoft}`,display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:UI.shadowSm}}>
+        <span style={{fontSize:12,color:UI.muted,fontWeight:500}}>{s.l}</span>
         <span style={{fontSize:18,fontWeight:600,color:s.c}}>{s.v}</span>
       </div>
     )}
@@ -280,55 +519,64 @@ function StatsCompact({tasks,dateStr}) {
 // ─── Active Block ───
 function ActiveBlockIndicator() {
   const b=getCurrentBlock(); if(!b) return null; const f=b.frente;
-  return <div style={{background:f?FBG(f):"#F1EFE8",borderRadius:12,padding:"10px 14px",display:"flex",alignItems:"center",gap:8,border:`1px solid ${f?FAC(f):"#E8E6DF"}`}}>
+  return <div style={{background:f?FBG(f):UI.surfaceSoft,borderRadius:14,padding:"10px 14px",display:"flex",alignItems:"center",gap:8,border:`1px solid ${f?FAC(f):UI.line}`,boxShadow:UI.shadowSm}}>
     <div style={{width:8,height:8,borderRadius:"50%",background:f?FC(f):"#5F5E5A",boxShadow:`0 0 6px ${f?FC(f)+"50":"transparent"}`}}/>
-    <div><div style={{fontSize:12,fontWeight:600,color:f?FDK(f):"#333"}}>{b.label}</div><div style={{fontSize:10,color:f?FC(f):"#888"}}>{b.time}</div></div>
+    <div><div style={{fontSize:12,fontWeight:600,color:f?FDK(f):UI.ink}}>{b.label}</div><div style={{fontSize:10,color:f?FC(f):UI.muted}}>{b.time}</div></div>
   </div>;
 }
 
 // ═══════════════════════════════════════════════════════════════
 // TASK CARD
 // ═══════════════════════════════════════════════════════════════
-function TaskCard({task,expanded,onToggleExpand,onToggleStep,onComplete,onDelete,onReschedule,onEdit,sops,index}) {
+function TaskCard({task,expanded,onToggleExpand,onToggleStep,onComplete,onDelete,onReschedule,onEdit,sops,index,postIt=false}) {
   const pct=task.steps?Math.round(task.steps.filter(s=>s.done).length/task.steps.length*100):0;
   const dateLabel = task.date !== today() ? getDateLabel(task.date) : null;
-  return <div className="ser-slideUp" style={{background:"#fff",border:"1px solid #E8E6DF",borderRadius:14,borderLeft:`4px solid ${FC(task.frente)}`,overflow:"hidden",animationDelay:`${(index||0)*0.05}s`}}>
+  return <div className="ser-slideUp" style={{
+    background:postIt?`linear-gradient(180deg, ${FBG(task.frente)} 0%, ${UI.surface} 88%)`:UI.surface,
+    border:postIt?`1px solid ${FAC(task.frente)}`:`1px solid ${UI.lineSoft}`,
+    borderRadius:14,
+    borderLeft:`4px solid ${FC(task.frente)}`,
+    overflow:"hidden",
+    boxShadow:postIt?UI.shadowMd:UI.shadowSm,
+    animationDelay:`${(index||0)*0.05}s`
+  }}>
+    {postIt&&<div style={{height:6,background:`linear-gradient(90deg, ${FAC(task.frente)} 0%, ${FC(task.frente)} 100%)`,opacity:0.75}}/>}
     <div onClick={()=>{SoundEngine.play("click");onToggleExpand(task.id);}} style={{padding:"12px 14px",cursor:"pointer"}}>
       <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
         <span style={{fontSize:18,lineHeight:1,flexShrink:0,marginTop:1}}>{TYPE_ICONS[task.type]||"📌"}</span>
         <div style={{flex:1,minWidth:0}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-            <span style={{fontSize:13,fontWeight:500,color:"#1A1A18",lineHeight:1.3}}>{task.startTime&&<span style={{fontSize:10,color:"#0F6E56",fontWeight:600,marginRight:4}}>{task.startTime}</span>}{task.title}</span>
-            {task.estimatedTime&&<span style={{fontSize:10,color:"#888",whiteSpace:"nowrap",flexShrink:0}}>{task.estimatedTime}m</span>}
+            <span style={{fontSize:13,fontWeight:500,color:UI.ink,lineHeight:1.3}}>{task.startTime&&<span style={{fontSize:10,color:FDK(task.frente),fontWeight:700,marginRight:4}}>{task.startTime}</span>}{task.title}</span>
+            {task.estimatedTime&&<span style={{fontSize:10,color:UI.muted,whiteSpace:"nowrap",flexShrink:0}}>{task.estimatedTime}m</span>}
           </div>
           <div style={{display:"flex",gap:4,alignItems:"center",marginTop:5,flexWrap:"wrap"}}>
             <FrentePill frente={task.frente} small/>
-            {dateLabel && <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"#FFF8E7",color:"#BA7517",fontWeight:600}}>{dateLabel}</span>}
+            {dateLabel && <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"#FFF8E7",color:UI.warning,fontWeight:700}}>{dateLabel}</span>}
             {task.steps&&task.steps.length>0&&<div style={{display:"flex",alignItems:"center",gap:3,marginLeft:"auto"}}>
-              <div style={{width:40,height:4,background:"#E8E6DF",borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:FAC(task.frente),borderRadius:3,transition:"width 0.3s"}}/></div>
-              <span style={{fontSize:9,color:"#888",fontWeight:600}}>{pct}%</span>
+              <div style={{width:40,height:4,background:UI.lineSoft,borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:FAC(task.frente),borderRadius:3,transition:"width 0.3s"}}/></div>
+              <span style={{fontSize:9,color:UI.muted,fontWeight:700}}>{pct}%</span>
             </div>}
           </div>
         </div>
       </div>
     </div>
-    {expanded&&<div className="ser-fadeIn" style={{padding:"0 14px 12px",borderTop:"1px solid #F0EEE8"}}>
-      {task.detail&&<p style={{fontSize:11,color:"#5F5E5A",lineHeight:1.5,margin:"8px 0",padding:"6px 8px",background:"#FAFAF8",borderRadius:8}}>{task.detail}</p>}
-      <div style={{fontSize:9,fontWeight:600,color:"#888",textTransform:"uppercase",letterSpacing:"0.08em",margin:"8px 0 4px"}}>Modo de execução</div>
+    {expanded&&<div className="ser-fadeIn" style={{padding:"0 14px 12px",borderTop:postIt?`1px dashed ${FAC(task.frente)}`:`1px solid ${UI.lineSoft}`}}>
+      {task.detail&&<p style={{fontSize:11,color:UI.inkSoft,lineHeight:1.5,margin:"8px 0",padding:"6px 8px",background:postIt?"rgba(255,255,255,0.65)":UI.surfaceSoft,borderRadius:8}}>{task.detail}</p>}
+      <div style={{fontSize:9,fontWeight:700,color:UI.muted,textTransform:"uppercase",letterSpacing:"0.08em",margin:"8px 0 4px"}}>Modo de execução</div>
       {task.steps&&task.steps.map((step,i)=>
         <div key={i} onClick={e=>{e.stopPropagation();SoundEngine.play("step-check");onToggleStep(task.id,i);}} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",borderRadius:8,cursor:"pointer",marginBottom:2,background:step.done?FBG(task.frente):"transparent"}}>
           <div style={{width:18,height:18,borderRadius:18,flexShrink:0,border:step.done?"none":"2px solid #D3D1C7",background:step.done?FC(task.frente):"transparent",display:"flex",alignItems:"center",justifyContent:"center"}}>
             {step.done&&<span className="ser-scaleIn" style={{color:"#fff",fontSize:10}}>✓</span>}
           </div>
-          <span style={{fontSize:12,color:step.done?"#888":"#1A1A18",flex:1,textDecoration:step.done?"line-through":"none"}}>{step.text}</span>
-          {step.time&&<span style={{fontSize:10,color:"#aaa"}}>{step.time}m</span>}
+          <span style={{fontSize:12,color:step.done?UI.muted:UI.ink,flex:1,textDecoration:step.done?"line-through":"none"}}>{step.text}</span>
+          {step.time&&<span style={{fontSize:10,color:UI.muted}}>{step.time}m</span>}
         </div>
       )}
       <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
-        <button onClick={e=>{e.stopPropagation();onComplete(task.id);}} style={{flex:1,padding:"9px 14px",borderRadius:10,border:"none",background:"#1A1A18",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer"}}>✓ Concluir</button>
-        <button onClick={e=>{e.stopPropagation();onEdit&&onEdit(task);}} style={{padding:"9px 14px",borderRadius:10,border:"1px solid #E8E6DF",background:"#fff",color:"#534AB7",fontSize:12,fontWeight:600,cursor:"pointer"}}>✎ Editar</button>
-        <button onClick={e=>{e.stopPropagation();onReschedule&&onReschedule(task.id,addDays(task.date,1));}} style={{padding:"9px 14px",borderRadius:10,border:"1px solid #E8E6DF",background:"#fff",color:"#BA7517",fontSize:12,cursor:"pointer"}}>Amanhã →</button>
-        <button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{padding:"9px 12px",borderRadius:10,border:"1px solid #E8E6DF",background:"#fff",color:"#B5302F",fontSize:12,cursor:"pointer"}}>✕</button>
+        <button onClick={e=>{e.stopPropagation();onComplete(task.id);}} style={{flex:1,padding:"9px 14px",borderRadius:10,border:"none",background:UI.darkA,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",boxShadow:UI.shadowSm}}>✓ Concluir</button>
+        <button onClick={e=>{e.stopPropagation();onEdit&&onEdit(task);}} style={{padding:"9px 14px",borderRadius:10,border:`1px solid ${UI.line}`,background:"#fff",color:FRENTE_COLORS.pessoal.dark,fontSize:12,fontWeight:700,cursor:"pointer"}}>✎ Editar</button>
+        <button onClick={e=>{e.stopPropagation();onReschedule&&onReschedule(task.id,addDays(task.date,1));}} style={{padding:"9px 14px",borderRadius:10,border:`1px solid ${UI.line}`,background:"#fff",color:UI.warning,fontSize:12,cursor:"pointer"}}>Amanhã →</button>
+        <button onClick={e=>{e.stopPropagation();onDelete(task.id);}} style={{padding:"9px 12px",borderRadius:10,border:`1px solid ${UI.line}`,background:"#fff",color:"#B84A3D",fontSize:12,cursor:"pointer"}}>✕</button>
       </div>
     </div>}
   </div>;
@@ -344,7 +592,7 @@ function NewTaskModal({onClose,onAdd,sops,defaultDate}) {
   const[steps,setSteps]=useState(()=>(sops["Outro"]?.steps||[]).map(s=>({...s})));
   const loadSOP=(t)=>{setType(t);setSteps((sops[t]?.steps||[]).map(s=>({...s})));};
   const totalTime=steps.reduce((s,st)=>s+(st.time||0),0);
-  const handleAdd=()=>{if(!title.trim())return;SoundEngine.play("task-create");onAdd({id:genId(),title:title.trim(),detail:detail.trim()||null,frente,type,steps:steps.filter(s=>s.text.trim()).map(s=>({...s,done:false})),estimatedTime:totalTime,createdAt:new Date().toISOString(),completedAt:null,date:taskDate,startTime:startTime||null});onClose();};
+  const handleAdd=()=>{if(!title.trim())return;const nowIso=new Date().toISOString();SoundEngine.play("task-create");onAdd({id:genId(),title:title.trim(),detail:detail.trim()||null,frente,type,steps:steps.filter(s=>s.text.trim()).map(s=>({...s,done:false})),estimatedTime:totalTime,createdAt:nowIso,updatedAt:nowIso,completedAt:null,date:taskDate,startTime:startTime||null});onClose();};
   const inp={padding:"10px 12px",borderRadius:10,border:"1px solid #E8E6DF",fontSize:13,outline:"none",width:"100%",boxSizing:"border-box"};
   return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:150}} onClick={onClose}>
     <div onClick={e=>e.stopPropagation()} className="ser-slideUp" style={{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:600,maxHeight:"90vh",overflow:"auto",padding:"20px 20px 28px"}}>
@@ -406,7 +654,7 @@ function EditTaskModal({task,onClose,onSave,sops}) {
   const[startTime,setStartTime]=useState(task.startTime||"");
   const[steps,setSteps]=useState(()=>(task.steps||[]).map(s=>({...s})));
   const totalTime=steps.reduce((s,st)=>s+(st.time||0),0);
-  const handleSave=()=>{if(!title.trim())return;SoundEngine.play("click");onSave({...task,title:title.trim(),detail:detail.trim()||null,frente,type,steps,estimatedTime:totalTime,date:taskDate,startTime:startTime||null});onClose();};
+  const handleSave=()=>{if(!title.trim())return;SoundEngine.play("click");onSave({...task,title:title.trim(),detail:detail.trim()||null,frente,type,steps,estimatedTime:totalTime,date:taskDate,startTime:startTime||null,updatedAt:new Date().toISOString()});onClose();};
   const inp={padding:"10px 12px",borderRadius:10,border:"1px solid #E8E6DF",fontSize:13,outline:"none",width:"100%",boxSizing:"border-box"};
   return <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:150}} onClick={onClose}>
     <div onClick={e=>e.stopPropagation()} className="ser-slideUp" style={{background:"#fff",borderRadius:"20px 20px 0 0",width:"100%",maxWidth:600,maxHeight:"90vh",overflow:"auto",padding:"20px 20px 28px"}}>
@@ -462,14 +710,15 @@ function DashboardChat({onAddTasks,sops}) {
     if(!input.trim()||loading) return; SoundEngine.play("chat-send");
     const txt=input.trim(); setMessages(p=>[...p,{role:"user",content:txt}]); setInput(""); setLoading(true); setPending(null);
     let parsed=null;
-    if(useAI){ try{ const r=await fetch("/api/parse-tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:txt,sopKeys})}); if(r.ok) parsed=await r.json(); }catch{} }
+    if(useAI){ try{ const r=await apiFetch("/api/parse-tasks",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:txt,sopKeys})}); if(r.ok) parsed=await r.json(); }catch{} }
 
     if(parsed&&parsed.tasks&&parsed.tasks.length>0){
       SoundEngine.play("chat-tasks-found");
       const enriched=parsed.tasks.map(t=>{
         const sop=sops[t.type]||sops["Outro"];
         const taskDate = t.date || parseDateFromText(txt);
-        return {id:genId(),title:t.title,detail:t.detail||null,frente:t.frente,type:t.type,steps:(sop?.steps||[]).map(s=>({...s,done:false})),estimatedTime:t.estimatedTime||sop?.totalTime||30,createdAt:new Date().toISOString(),completedAt:null,date:taskDate,startTime:t.startTime||null};
+        const nowIso = new Date().toISOString();
+        return {id:genId(),title:t.title,detail:t.detail||null,frente:t.frente,type:t.type,steps:(sop?.steps||[]).map(s=>({...s,done:false})),estimatedTime:t.estimatedTime||sop?.totalTime||30,createdAt:nowIso,updatedAt:nowIso,completedAt:null,date:taskDate,startTime:t.startTime||null};
       });
       setPending(enriched);
       setMessages(p=>[...p,{role:"assistant",content:parsed.message||`Encontrei ${enriched.length} tarefa(s).`}]);
@@ -486,37 +735,37 @@ function DashboardChat({onAddTasks,sops}) {
 
   const confirm=()=>{if(!pending)return;SoundEngine.play("task-create");onAddTasks(pending);setMessages(p=>[...p,{role:"system",content:`${pending.length} tarefa(s) adicionada(s)!`}]);setPending(null);};
 
-  return <div style={{background:"#fff",borderRadius:16,border:"1px solid #E8E6DF",overflow:"hidden"}}>
-    <div style={{padding:"12px 16px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #F0EEE8"}}>
+  return <div style={{background:`linear-gradient(180deg, ${UI.surface} 0%, ${UI.surfaceSoft} 100%)`,borderRadius:18,border:`1px solid ${UI.lineSoft}`,overflow:"hidden",boxShadow:UI.shadowSm}}>
+    <div style={{padding:"12px 16px 10px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:`1px solid ${UI.lineSoft}`}}>
       <div style={{display:"flex",alignItems:"center",gap:6}}>
-        <div style={{width:8,height:8,borderRadius:"50%",background:"#0F6E56",boxShadow:"0 0 6px #0F6E5640"}}/>
-        <span style={{fontSize:13,fontWeight:600,color:"#1A1A18"}}>{getGreeting()}, Sergio</span>
+        <div style={{width:8,height:8,borderRadius:"50%",background:UI.success,boxShadow:"0 0 8px #1A9A7855"}}/>
+        <span style={{fontSize:13,fontWeight:600,color:UI.ink}}>{getGreeting()}, Sergio</span>
       </div>
-      <button onClick={()=>setUseAI(v=>!v)} style={{padding:"3px 8px",borderRadius:20,border:"1px solid #E8E6DF",background:useAI?"#E1F5EE":"#F1EFE8",color:useAI?"#085041":"#888",fontSize:9,fontWeight:600,cursor:"pointer"}}>{useAI?"IA":"Local"}</button>
+      <button onClick={()=>setUseAI(v=>!v)} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${useAI?FAC("haldan"):UI.line}`,background:useAI?FBG("haldan"):UI.surfaceSoft,color:useAI?FDK("haldan"):UI.muted,fontSize:9,fontWeight:700,cursor:"pointer"}}>{useAI?"IA":"Local"}</button>
     </div>
     <div style={{maxHeight:200,overflowY:"auto",padding:"10px 16px"}}>
       {messages.length===0&&!pending&&<div style={{display:"flex",flexWrap:"wrap",gap:4,padding:"4px 0"}}>
-        {["O que tem pra hoje?","Tarefas de amanhã","Revisar semana"].map(q=><button key={q} onClick={()=>setInput(q)} style={{padding:"6px 12px",borderRadius:20,border:"1px solid #E8E6DF",background:"#FAFAF8",fontSize:11,color:"#555",cursor:"pointer"}}>{q}</button>)}
+        {["O que tem pra hoje?","Tarefas de amanhã","Revisar semana"].map(q=><button key={q} onClick={()=>setInput(q)} style={{padding:"6px 12px",borderRadius:20,border:`1px solid ${UI.line}`,background:UI.surface,fontSize:11,color:UI.inkSoft,cursor:"pointer"}}>{q}</button>)}
       </div>}
       {messages.map((m,i)=><div key={i} className="ser-fadeIn" style={{display:"flex",justifyContent:m.role==="user"?"flex-end":"flex-start",marginBottom:4}}>
-        <div style={{maxWidth:"85%",padding:"8px 12px",borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?"#1A1A18":m.role==="system"?"#E1F5EE":"#F5F4EF",color:m.role==="user"?"#fff":m.role==="system"?"#085041":"#333",fontSize:12,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{m.content}</div>
+        <div style={{maxWidth:"85%",padding:"8px 12px",borderRadius:m.role==="user"?"12px 12px 3px 12px":"12px 12px 12px 3px",background:m.role==="user"?UI.darkA:m.role==="system"?FBG("haldan"):UI.surface,color:m.role==="user"?"#fff":m.role==="system"?FDK("haldan"):UI.inkSoft,fontSize:12,lineHeight:1.5,whiteSpace:"pre-wrap",border:m.role==="user"?"none":`1px solid ${UI.lineSoft}`}}>{m.content}</div>
       </div>)}
-      {loading&&<div className="ser-pulse" style={{padding:"8px 12px",borderRadius:"12px 12px 12px 3px",background:"#F5F4EF",color:"#888",fontSize:12,display:"inline-block"}}>{useAI?"IA interpretando...":"Processando..."}</div>}
+      {loading&&<div className="ser-pulse" style={{padding:"8px 12px",borderRadius:"12px 12px 12px 3px",background:UI.surface,color:UI.muted,fontSize:12,display:"inline-block",border:`1px solid ${UI.lineSoft}`}}>{useAI?"IA interpretando...":"Processando..."}</div>}
       <div ref={ref}/>
     </div>
     {pending&&<div style={{padding:"0 16px 10px"}}>
       <div style={{fontSize:10,fontWeight:600,color:"#888",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.04em"}}>Tarefas identificadas</div>
-      {pending.map((t,i)=><div key={t.id} className="ser-slideUp" style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px",background:"#FAFAF8",borderRadius:10,marginBottom:3,borderLeft:`3px solid ${FC(t.frente)}`,animationDelay:`${i*0.05}s`}}>
+      {pending.map((t,i)=><div key={t.id} className="ser-slideUp" style={{display:"flex",alignItems:"center",gap:6,padding:"8px 10px",background:UI.surface,borderRadius:10,marginBottom:3,borderLeft:`3px solid ${FC(t.frente)}`,border:`1px solid ${UI.lineSoft}`,animationDelay:`${i*0.05}s`}}>
         <span style={{fontSize:14}}>{TYPE_ICONS[t.type]||"📌"}</span>
-        <div style={{flex:1}}><span style={{fontSize:12,fontWeight:500,color:"#1A1A18"}}>{t.title}</span><div style={{display:"flex",gap:3,marginTop:2}}><FrentePill frente={t.frente} small/><span style={{fontSize:9,color:"#aaa"}}>~{t.estimatedTime}m</span>{t.date!==today()&&<span style={{fontSize:9,padding:"1px 6px",borderRadius:20,background:"#FFF8E7",color:"#BA7517",fontWeight:600}}>{getDateLabel(t.date)}</span>}</div></div>
-        <button onClick={()=>setPending(p=>{const f=p.filter(x=>x.id!==t.id);return f.length?f:null;})} style={{background:"none",border:"none",color:"#ccc",fontSize:16,cursor:"pointer"}}>×</button>
+        <div style={{flex:1}}><span style={{fontSize:12,fontWeight:500,color:UI.ink}}>{t.title}</span><div style={{display:"flex",gap:3,marginTop:2}}><FrentePill frente={t.frente} small/><span style={{fontSize:9,color:UI.muted}}>~{t.estimatedTime}m</span>{t.date!==today()&&<span style={{fontSize:9,padding:"1px 6px",borderRadius:20,background:"#FFF8E7",color:UI.warning,fontWeight:600}}>{getDateLabel(t.date)}</span>}</div></div>
+        <button onClick={()=>setPending(p=>{const f=p.filter(x=>x.id!==t.id);return f.length?f:null;})} style={{background:"none",border:"none",color:"#B8C0CC",fontSize:16,cursor:"pointer"}}>×</button>
       </div>)}
-      <button onClick={confirm} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",background:"#0F6E56",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",marginTop:4}}>✓ Confirmar {pending.length} tarefa(s)</button>
+      <button onClick={confirm} style={{width:"100%",padding:"10px",borderRadius:10,border:"none",background:UI.success,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",marginTop:4,boxShadow:UI.shadowSm}}>✓ Confirmar {pending.length} tarefa(s)</button>
     </div>}
-    <div style={{padding:"6px 10px 10px",borderTop:"1px solid #F0EEE8"}}>
-      <div style={{display:"flex",gap:6,alignItems:"center",background:"#F6F5F0",borderRadius:24,padding:"3px 3px 3px 14px"}}>
+    <div style={{padding:"6px 10px 10px",borderTop:`1px solid ${UI.lineSoft}`}}>
+      <div style={{display:"flex",gap:6,alignItems:"center",background:UI.surface,borderRadius:24,padding:"3px 3px 3px 14px",border:`1px solid ${UI.line}`}}>
         <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&sendMessage()} placeholder="Reunião amanhã, treino sexta, SEO hoje..." style={{flex:1,border:"none",outline:"none",fontSize:12,background:"transparent",padding:"6px 0"}}/>
-        <button onClick={sendMessage} disabled={!input.trim()||loading} style={{width:36,height:36,borderRadius:"50%",border:"none",background:input.trim()&&!loading?"#1A1A18":"#D3D1C7",color:"#fff",fontSize:14,cursor:input.trim()&&!loading?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>↑</button>
+        <button onClick={sendMessage} disabled={!input.trim()||loading} style={{width:36,height:36,borderRadius:"50%",border:"none",background:input.trim()&&!loading?UI.darkA:"#CBD5E1",color:"#fff",fontSize:14,cursor:input.trim()&&!loading?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>↑</button>
       </div>
     </div>
   </div>;
@@ -524,7 +773,7 @@ function DashboardChat({onAddTasks,sops}) {
 
 // ─── Local parser (date-aware) ───
 function localParse(text,sops) {
-  const lines=text.split(/[,\n•\-]/).map(s=>s.trim()).filter(Boolean);
+  const lines=text.split(/[,\n•]/).map(s=>s.trim()).filter(Boolean);
   if(!lines.length) return [];
   const fKw={haldan:["haldan","equipe","gerência","gerencia","alinhamento interno"],taka:["taka","estúdio","estudio","cliente","dr.","dra.","seo","conteúdo","conteudo","proposta","wordpress","follow-up","followup"],pessoal:["treino","academia","corrida","esporte","cozinhar","comida","marmita","almoço","almoco","jantar","casa","limpar","organizar","mari","bebê","bebe","pessoal","saúde","saude"]};
   const tKw={"Reunião":["reunião","reuniao","call","meeting","alinhamento"],"SEO":["seo","texto seo","artigo","blog"],"WordPress":["wordpress","wp","site","página","pagina"],"Conteúdo":["conteúdo","conteudo","copy","legenda","post","instagram"],"Follow-up":["follow-up","followup","retorno","cobrar"],"Proposta":["proposta","orçamento","orcamento","pitch"],"Gestão equipe":["equipe","time","delegar","alinhar","gestão","gestao"],"Alimentação":["cozinhar","comida","marmita","almoço","almoco","jantar"],"Esporte":["treino","academia","corrida","exercício","exercicio"],"Casa":["limpar","organizar","casa","roupa","lavar","mercado"]};
@@ -545,7 +794,8 @@ function localParse(text,sops) {
     if(/\bde manh[aã]\b/.test(lower)) startTime="08:00";
     if(/\b[àa] tarde\b/.test(lower)) startTime="14:00";
     if(/\b[àa] noite\b/.test(lower)) startTime="19:00";
-    return {id:genId(),title:line.charAt(0).toUpperCase()+line.slice(1),detail:null,frente,type,steps:(sop?.steps||[]).map(s=>({...s,done:false})),estimatedTime:est,createdAt:new Date().toISOString(),completedAt:null,date,startTime};
+    const nowIso = new Date().toISOString();
+    return {id:genId(),title:line.charAt(0).toUpperCase()+line.slice(1),detail:null,frente,type,steps:(sop?.steps||[]).map(s=>({...s,done:false})),estimatedTime:est,createdAt:nowIso,updatedAt:nowIso,completedAt:null,date,startTime};
   });
 }
 
@@ -639,7 +889,11 @@ function AIChatView() {
   const send=async()=>{
     if(!input.trim()||loading) return; SoundEngine.play("chat-send");
     const msg={role:"user",content:input.trim()}; const all=[...messages,msg]; setMessages(all); setInput(""); setLoading(true);
-    try{ const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:all.map(m=>({role:m.role,content:m.content}))})}); const d=await r.json(); SoundEngine.play("chat-receive"); setMessages(p=>[...p,{role:"assistant",content:d.error?`Erro: ${d.error}`:d.text}]); }
+    try{
+      const compact=all.slice(-10).map(m=>({role:m.role,content:String(m.content||"").slice(0,900)}));
+      const r=await apiFetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:compact})});
+      const d=await r.json(); SoundEngine.play("chat-receive"); setMessages(p=>[...p,{role:"assistant",content:d.error?`Erro: ${d.error}`:d.text}]);
+    }
     catch{ setMessages(p=>[...p,{role:"assistant",content:"Erro de conexão."}]); }
     setLoading(false);
   };
@@ -692,20 +946,20 @@ function WhatsAppSetup() {
   const[error,setError]=useState(null);
 
   const fetchStatus=useCallback(async()=>{
-    try{const r=await fetch("/api/whatsapp/status");const d=await r.json();setStatus(d.status||"disconnected");if(d.phoneNumber)setPhone(d.phoneNumber);if(d.remindersEnabled!==undefined)setReminders(d.remindersEnabled);if(d.qrcode)setQrcode(d.qrcode);if(d.status==="connected")setQrcode(null);}catch{}
+    try{const r=await apiFetch("/api/whatsapp/status");const d=await r.json();setStatus(d.status||"disconnected");if(d.phoneNumber)setPhone(d.phoneNumber);if(d.remindersEnabled!==undefined)setReminders(d.remindersEnabled);if(d.qrcode)setQrcode(d.qrcode);if(d.status==="connected")setQrcode(null);}catch{}
   },[]);
 
   useEffect(()=>{fetchStatus();const iv=setInterval(fetchStatus,3000);return()=>clearInterval(iv);},[fetchStatus]);
 
   const generateQR=async()=>{
     setLoading(true);setError(null);
-    try{const r=await fetch("/api/whatsapp/qr");const d=await r.json();if(d.qrcode)setQrcode(d.qrcode);if(d.success)setStatus("connecting");if(d.error)setError(d.error);}
+    try{const r=await apiFetch("/api/whatsapp/qr");const d=await r.json();if(d.qrcode)setQrcode(d.qrcode);if(d.success)setStatus("connecting");if(d.error)setError(d.error);}
     catch(e){setError("Erro ao conectar. Reinicie o servidor.");}
     finally{setLoading(false);}
   };
 
   const saveConfig=async()=>{
-    try{await fetch("/api/whatsapp/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phoneNumber:phone,remindersEnabled:reminders})});setError(null);}
+    try{await apiFetch("/api/whatsapp/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({phoneNumber:phone,remindersEnabled:reminders})});setError(null);}
     catch{setError("Erro ao salvar configuracoes");}
   };
 
@@ -751,7 +1005,7 @@ function WhatsAppSetup() {
       </div>
 
       {/* Lembretes toggle */}
-      <div onClick={()=>{const next=!reminders;setReminders(next);fetch("/api/whatsapp/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({remindersEnabled:next})}).catch(()=>{});}} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",padding:"4px 0"}}>
+      <div onClick={()=>{const next=!reminders;setReminders(next);apiFetch("/api/whatsapp/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({remindersEnabled:next})}).catch(()=>{});}} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",padding:"4px 0"}}>
         <div><div style={{fontSize:12,fontWeight:500}}>Lembretes diarios</div><div style={{fontSize:10,color:"#888"}}>8h, 13h e 19h via WhatsApp</div></div>
         <div style={{width:40,height:24,borderRadius:12,padding:2,background:reminders?"#25D366":"#D3D1C7",transition:"background 0.2s"}}><div style={{width:20,height:20,borderRadius:10,background:"#fff",transform:reminders?"translateX(16px)":"translateX(0)",transition:"transform 0.2s"}}/></div>
       </div>
@@ -802,11 +1056,11 @@ function Onboarding({onComplete}) {
 const NAV_ITEMS=[{id:"dashboard",label:"Hoje",icon:"◉"},{id:"calendar",label:"Agenda",icon:"▦"},{id:"notes",label:"Notas",icon:"✎"},{id:"ai",label:"IA",icon:"◎"},{id:"config",label:"Config",icon:"⚙"}];
 
 function BottomNav({view,setView}) {
-  return<div style={{position:"fixed",bottom:0,left:0,right:0,background:"#fff",borderTop:"1px solid #E8E6DF",display:"flex",justifyContent:"center",gap:0,padding:"6px 0 env(safe-area-inset-bottom, 8px)",zIndex:100}}>
-    <div style={{display:"flex",maxWidth:600,width:"100%",justifyContent:"space-around"}}>
-      {NAV_ITEMS.map(n=><button key={n.id} onClick={()=>{SoundEngine.play("click");setView(n.id);}} style={{background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"6px 8px",borderRadius:8,color:view===n.id?"#1A1A18":"#B0AEA6",transition:"color 0.2s"}}>
+  return<div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(255,255,255,0.9)",backdropFilter:"blur(10px)",borderTop:`1px solid ${UI.lineSoft}`,display:"flex",justifyContent:"center",gap:0,padding:"6px 0 env(safe-area-inset-bottom, 8px)",zIndex:100,boxShadow:"0 -6px 20px rgba(15,23,42,0.08)"}}>
+    <div style={{display:"flex",maxWidth:680,width:"100%",justifyContent:"space-around"}}>
+      {NAV_ITEMS.map(n=><button key={n.id} onClick={()=>{SoundEngine.play("click");setView(n.id);}} style={{background:view===n.id?"#EEF2FF":"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,padding:"6px 10px",borderRadius:10,color:view===n.id?UI.darkA:"#94A3B8",transition:"color 0.2s"}}>
         <span style={{fontSize:18,lineHeight:1}}>{n.icon}</span>
-        <span style={{fontSize:9,fontWeight:view===n.id?700:500}}>{n.label}</span>
+        <span style={{fontSize:9,fontWeight:view===n.id?700:600}}>{n.label}</span>
       </button>)}
     </div>
   </div>;
@@ -827,22 +1081,150 @@ export default function SERSystem() {
   const[soundEnabled,setSoundEnabled]=useState(true);
   const[selectedDate,setSelectedDate]=useState(today());
   const[editingTask,setEditingTask]=useState(null);
+  const[syncReady,setSyncReady]=useState(false);
+  const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
+  const[lastSyncAt,setLastSyncAt]=useState(null);
+  const[viewportWidth,setViewportWidth]=useState(typeof window!=="undefined"?window.innerWidth:900);
+  const syncHashRef=useRef(null);
   const streak=useMemo(()=>updateStreak(),[]);
   const pom=usePomodoro();
 
   useEffect(()=>{injectStyles();SoundEngine.init();},[]);
   useEffect(()=>{saveData(data);},[data]);
   useEffect(()=>{SoundEngine.enabled=soundEnabled;},[soundEnabled]);
+  useEffect(()=>{
+    if(typeof window==="undefined") return;
+    const onResize=()=>setViewportWidth(window.innerWidth);
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
 
-  const toggleStep=useCallback((taskId,stepIndex)=>{setData(d=>({...d,tasks:d.tasks.map(t=>t.id!==taskId?t:{...t,steps:t.steps.map((s,i)=>i===stepIndex?{...s,done:!s.done}:s)})}));},[]);
+  const applyRemoteSnapshot = useCallback((remoteTasks = []) => {
+    setData(prev => {
+      const split = splitTasksByCompletion(Array.isArray(remoteTasks) ? remoteTasks : [], prev.sops || DEFAULT_SOPS);
+      const active = sortTasksList(split.active);
+      const completed = sortHistoryList(split.completed);
+      const nextHash = serializeTasksForSync([...active, ...completed]);
+      const prevHash = serializeTasksForSync([...(prev.tasks || []), ...(prev.history || [])]);
+      syncHashRef.current = nextHash;
+      if (nextHash === prevHash) return prev;
+      return { ...prev, tasks: active, history: completed };
+    });
+  }, []);
+
+  const pullRemoteAgenda = useCallback(async () => {
+    const r = await apiFetch("/api/agenda/tasks");
+    if (!r.ok) throw new Error(await extractApiError(r));
+    const d = await r.json().catch(() => ({}));
+    const remote = Array.isArray(d?.tasks) ? d.tasks : [];
+    applyRemoteSnapshot(remote);
+    return remote.length;
+  }, [applyRemoteSnapshot]);
+
+  const refreshAgendaNow = useCallback(async () => {
+    setSyncStatus({ mode: "connecting", message: "Atualizando agenda..." });
+    try {
+      await pullRemoteAgenda();
+      setLastSyncAt(new Date().toISOString());
+      setSyncStatus({ mode: "ok", message: "WhatsApp e página sincronizados." });
+    } catch (err) {
+      const msg = String(err?.message || "Falha ao atualizar agenda.");
+      const friendly = /nao autorizado|não autorizado/i.test(msg)
+        ? "Sem permissão para sincronizar. Verifique token."
+        : "Sem conexão com o servidor de agenda.";
+      setSyncStatus({ mode: "error", message: friendly });
+    }
+  }, [pullRemoteAgenda]);
+
+  useEffect(()=>{
+    let active=true;
+    (async()=>{
+      try{
+        setSyncStatus({ mode: "connecting", message: "Sincronizando agenda..." });
+        const r=await apiFetch("/api/agenda/tasks");
+        if(!r.ok) throw new Error(await extractApiError(r));
+        const d=await r.json().catch(()=>({}));
+        const remote=Array.isArray(d?.tasks)?d.tasks:[];
+        if(!active) return;
+        applyRemoteSnapshot(remote);
+        setLastSyncAt(new Date().toISOString());
+        setSyncStatus({ mode: "ok", message: "WhatsApp e página sincronizados." });
+      }catch(err){
+        if(!active) return;
+        const msg = String(err?.message || "Falha ao conectar.");
+        const friendly = /nao autorizado|não autorizado/i.test(msg)
+          ? "Sem permissão para sincronizar. Verifique token."
+          : "Não consegui sincronizar com o servidor agora.";
+        setSyncStatus({ mode: "error", message: friendly });
+      }
+      finally{ if(active) setSyncReady(true); }
+    })();
+    return()=>{active=false;};
+  },[applyRemoteSnapshot]);
+
+  useEffect(()=>{
+    if(!syncReady) return;
+    const allForSync=[...(data.tasks||[]),...(data.history||[])];
+    const normalized=sortTasksList(allForSync.map(t=>normalizeTaskShape(t,data.sops||DEFAULT_SOPS)).filter(Boolean));
+    const nextHash=serializeTasksForSync(normalized);
+    if(nextHash===syncHashRef.current) return;
+
+    let cancelled=false;
+    (async()=>{
+      try{
+        setSyncStatus(prev=>prev.mode==="ok" ? { mode: "connecting", message: "Enviando alterações..." } : prev);
+        const r=await apiFetch("/api/agenda/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tasks:normalized})});
+        if(!r.ok) throw new Error(await extractApiError(r));
+        const d=await r.json().catch(()=>null);
+        if(cancelled) return;
+        const remote=Array.isArray(d?.tasks)?d.tasks:[];
+        if(remote.length===0){
+          syncHashRef.current=nextHash;
+        }else{
+          applyRemoteSnapshot(remote);
+        }
+        setLastSyncAt(new Date().toISOString());
+        setSyncStatus({ mode: "ok", message: "WhatsApp e página sincronizados." });
+      }catch(err){
+        if(cancelled) return;
+        const msg = String(err?.message || "Falha ao sincronizar.");
+        const friendly = /nao autorizado|não autorizado/i.test(msg)
+          ? "Sem permissão para sincronizar. Verifique token."
+          : "Falha ao sincronizar mudanças com o servidor.";
+        setSyncStatus({ mode: "error", message: friendly });
+      }
+    })();
+
+    return()=>{cancelled=true;};
+  },[syncReady,data.tasks,data.history,data.sops,applyRemoteSnapshot]);
+
+  useEffect(()=>{
+    if(!syncReady) return;
+    const iv=setInterval(async()=>{
+      try{
+        await pullRemoteAgenda();
+        setLastSyncAt(new Date().toISOString());
+        setSyncStatus(prev=>prev.mode==="error" ? { mode: "ok", message: "Sincronização restabelecida." } : prev);
+      }catch(err){
+        const msg = String(err?.message || "Falha ao atualizar.");
+        const friendly = /nao autorizado|não autorizado/i.test(msg)
+          ? "Sem permissão para ler a agenda no servidor."
+          : "Sem conexão com o servidor de agenda.";
+        setSyncStatus({ mode: "error", message: friendly });
+      }
+    },5000);
+    return()=>clearInterval(iv);
+  },[syncReady,pullRemoteAgenda]);
+
+  const toggleStep=useCallback((taskId,stepIndex)=>{setData(d=>({...d,tasks:d.tasks.map(t=>t.id!==taskId?t:{...t,steps:t.steps.map((s,i)=>i===stepIndex?{...s,done:!s.done}:s),updatedAt:new Date().toISOString()})}));},[]);
   const completeTask=useCallback((taskId)=>{
-    setData(d=>{const task=d.tasks.find(t=>t.id===taskId);if(!task)return d;const completed={...task,completedAt:new Date().toISOString(),steps:task.steps.map(s=>({...s,done:true}))};return{...d,tasks:d.tasks.filter(t=>t.id!==taskId),history:[...d.history,completed]};});
+    setData(d=>{const task=d.tasks.find(t=>t.id===taskId);if(!task)return d;const nowIso=new Date().toISOString();const completed={...task,completedAt:nowIso,updatedAt:nowIso,steps:task.steps.map(s=>({...s,done:true}))};return{...d,tasks:d.tasks.filter(t=>t.id!==taskId),history:sortHistoryList([...(d.history||[]),completed])};});
     setExpandedTask(null);SoundEngine.play("task-complete");setToast({message:"Tarefa concluída!",taskId});
     setTimeout(()=>{const remaining=data.tasks.filter(t=>t.id!==taskId&&t.date===today()&&!t.completedAt);if(remaining.length===0&&data.tasks.filter(t=>t.date===today()).length>1){setShowConfetti(true);SoundEngine.play("celebration");setTimeout(()=>setShowConfetti(false),2000);}},100);
   },[data.tasks]);
   const deleteTask=useCallback((taskId)=>{const task=data.tasks.find(t=>t.id===taskId);SoundEngine.play("task-delete");setData(d=>({...d,tasks:d.tasks.filter(t=>t.id!==taskId)}));setExpandedTask(null);if(task){setToast({message:"Tarefa removida",onUndo:()=>setData(d=>({...d,tasks:[...d.tasks,task]}))});}},[data.tasks]);
-  const reschedule=useCallback((taskId,newDate)=>{SoundEngine.play("click");setData(d=>({...d,tasks:d.tasks.map(t=>t.id===taskId?{...t,date:newDate}:t)}));setExpandedTask(null);setToast({message:`Movida pra ${getDateLabel(newDate)}`});},[]);
-  const saveEditedTask=useCallback((updatedTask)=>{setData(d=>({...d,tasks:d.tasks.map(t=>t.id===updatedTask.id?updatedTask:t)}));setExpandedTask(null);setToast({message:"Tarefa atualizada!"});},[]);
+  const reschedule=useCallback((taskId,newDate)=>{SoundEngine.play("click");setData(d=>({...d,tasks:d.tasks.map(t=>t.id===taskId?{...t,date:newDate,updatedAt:new Date().toISOString()}:t)}));setExpandedTask(null);setToast({message:`Movida pra ${getDateLabel(newDate)}`});},[]);
+  const saveEditedTask=useCallback((updatedTask)=>{setData(d=>({...d,tasks:d.tasks.map(t=>t.id===updatedTask.id?{...updatedTask,updatedAt:updatedTask.updatedAt||new Date().toISOString()}:t)}));setExpandedTask(null);setToast({message:"Tarefa atualizada!"});},[]);
 
   const viewDate = view==="day"?selectedDate:today();
   const dateTasks=data.tasks.filter(t=>t.date===viewDate&&!t.completedAt);
@@ -850,21 +1232,61 @@ export default function SERSystem() {
   const todayDone=todayAll.filter(t=>t.completedAt).length + data.history.filter(t=>(t.completedAt?.slice(0,10))===today()).length;
   const filtered=filterFrente?dateTasks.filter(t=>t.frente===filterFrente):dateTasks;
   const totalEstimate=dateTasks.reduce((s,t)=>s+(t.estimatedTime||0),0);
+  const isWideDashboard = view==="dashboard" && viewportWidth>=1100;
+  const layoutMaxWidth = isWideDashboard ? Math.max(1000,Math.min(1600,viewportWidth-32)) : 600;
 
   const renderTaskList = (tasks, dateStr) => {
     if(tasks.length===0) return <div style={{textAlign:"center",padding:"24px 16px",color:"#888"}}><div style={{fontSize:24,marginBottom:4,opacity:0.2}}>○</div><p style={{fontSize:12,margin:0}}>{dateStr===today()?"Pronto pra começar!":"Nada agendado."}</p></div>;
     return <div style={{display:"flex",flexDirection:"column",gap:6}}>{tasks.map((t,i)=><TaskCard key={t.id} task={t} index={i} expanded={expandedTask===t.id} onToggleExpand={id=>setExpandedTask(expandedTask===id?null:id)} onToggleStep={toggleStep} onComplete={completeTask} onDelete={deleteTask} onReschedule={reschedule} onEdit={t=>setEditingTask(t)} sops={data.sops}/>)}</div>;
   };
 
-  return <div style={{background:"#F6F5F0",minHeight:"100vh",color:"#1A1A18",paddingBottom:70}}>
+  const renderTaskBoard = (tasks, dateStr) => {
+    if(tasks.length===0) return renderTaskList(tasks,dateStr);
+    const order=["taka","haldan","pessoal"];
+    return <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:14,alignItems:"start"}}>
+      {order.map((frente,colIdx)=>{
+        const colTasks=tasks.filter(t=>t.frente===frente);
+        const active=!filterFrente||filterFrente===frente;
+        return <div key={frente} style={{
+          background:`linear-gradient(180deg, ${FBG(frente)} 0%, ${UI.surface} 72%)`,
+          border:`1px solid ${FAC(frente)}`,
+          borderTop:`6px solid ${FC(frente)}`,
+          borderRadius:18,
+          padding:12,
+          minHeight:220,
+          opacity:active?1:0.48,
+          boxShadow:active?UI.shadowMd:"none",
+          backdropFilter:"blur(2px)"
+        }}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,padding:"0 2px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:FC(frente)}}/>
+              <span style={{fontSize:12,fontWeight:700,color:FDK(frente),letterSpacing:"0.01em"}}>{FRENTES[frente]}</span>
+            </div>
+            <span style={{fontSize:10,fontWeight:700,color:FC(frente),background:"#fff",border:`1px solid ${FAC(frente)}`,borderRadius:20,padding:"3px 8px"}}>{colTasks.length}</span>
+          </div>
+          {colTasks.length===0
+            ? <div style={{textAlign:"center",padding:"14px 8px",fontSize:11,color:UI.muted}}>Sem tarefas nesta frente.</div>
+            : <div style={{display:"flex",flexDirection:"column",gap:8}}>{colTasks.map((t,i)=><TaskCard key={t.id} task={t} index={i+(colIdx*0.1)} expanded={expandedTask===t.id} onToggleExpand={id=>setExpandedTask(expandedTask===id?null:id)} onToggleStep={toggleStep} onComplete={completeTask} onDelete={deleteTask} onReschedule={reschedule} onEdit={t=>setEditingTask(t)} sops={data.sops} postIt/>)}</div>}
+        </div>;
+      })}
+    </div>;
+  };
+
+  return <div style={{background:`linear-gradient(180deg, ${UI.pageTop} 0%, ${UI.pageBottom} 100%)`,minHeight:"100vh",color:UI.ink,paddingBottom:70,position:"relative"}}>
+    <div style={{position:"fixed",inset:0,pointerEvents:"none",zIndex:0}}>
+      <div style={{position:"absolute",top:-120,left:-100,width:460,height:460,background:"radial-gradient(circle, rgba(97,120,255,0.14) 0%, rgba(97,120,255,0) 65%)"}}/>
+      <div style={{position:"absolute",top:200,right:-120,width:420,height:420,background:"radial-gradient(circle, rgba(22,170,136,0.12) 0%, rgba(22,170,136,0) 70%)"}}/>
+      <div style={{position:"absolute",bottom:-140,left:"30%",width:520,height:520,background:"radial-gradient(circle, rgba(222,90,74,0.10) 0%, rgba(222,90,74,0) 70%)"}}/>
+    </div>
     {showOnboarding&&<Onboarding onComplete={()=>setShowOnboarding(false)}/>}
     <Confetti active={showConfetti}/>
 
     {/* Header */}
-    <div style={{background:"#1A1A18",padding:"16px 20px 14px",borderRadius:"0 0 20px 20px"}}>
+    <div style={{background:`linear-gradient(165deg, ${UI.darkA} 0%, ${UI.darkB} 100%)`,padding:"16px 20px 14px",borderRadius:"0 0 24px 24px",boxShadow:UI.shadowMd,position:"relative",zIndex:1}}>
       <W style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div>
-          <div style={{fontSize:9,color:"rgba(255,255,255,0.3)",fontWeight:600,letterSpacing:"0.15em",textTransform:"uppercase"}}>Sistema</div>
+          <div style={{fontSize:9,color:"rgba(255,255,255,0.42)",fontWeight:700,letterSpacing:"0.15em",textTransform:"uppercase"}}>Sistema</div>
           <h1 style={{margin:0,fontSize:24,fontWeight:600,color:"#fff",letterSpacing:"-0.02em"}}>SER</h1>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -873,14 +1295,14 @@ export default function SERSystem() {
         </div>
       </W>
       <W><div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
-        <span style={{fontSize:11,color:"rgba(255,255,255,0.3)"}}>{fmtDate(today())}</span>
-        <span style={{fontSize:10,color:"rgba(255,255,255,0.2)"}}>Separar · Executar · Revisar</span>
+        <span style={{fontSize:11,color:"rgba(255,255,255,0.45)"}}>{fmtDate(today())}</span>
+        <span style={{fontSize:10,color:"rgba(255,255,255,0.35)"}}>Separar · Executar · Revisar</span>
       </div></W>
     </div>
 
     {/* Content */}
-    <div style={{padding:"14px 16px 16px"}}>
-      <W>
+    <div style={{padding:"14px 16px 16px",position:"relative",zIndex:1}}>
+      <W style={isWideDashboard?{maxWidth:layoutMaxWidth}:undefined}>
         {view==="dashboard"&&<>
           {/* Stats + Pomodoro side by side */}
           <div style={{display:"flex",gap:8,marginBottom:12}}>
@@ -894,13 +1316,42 @@ export default function SERSystem() {
 
           <div style={{marginTop:16}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <h3 style={{margin:0,fontSize:14,fontWeight:600}}>Tarefas de hoje</h3>
-              <div style={{display:"flex",gap:3}}>
-                <button onClick={()=>setFilterFrente(null)} style={{padding:"4px 10px",borderRadius:20,border:"none",fontSize:9,fontWeight:600,cursor:"pointer",background:!filterFrente?"#1A1A18":"#E8E6DF",color:!filterFrente?"#fff":"#888"}}>Todas</button>
-                {Object.entries(FRENTES).map(([k,v])=><button key={k} onClick={()=>setFilterFrente(k)} style={{padding:"4px 10px",borderRadius:20,border:"none",fontSize:9,fontWeight:600,cursor:"pointer",background:filterFrente===k?FBG(k):"#E8E6DF",color:filterFrente===k?FC(k):"#888"}}>{v.split(" ").pop()}</button>)}
+              <h3 style={{margin:0,fontSize:14,fontWeight:700,color:UI.ink}}>Tarefas de hoje</h3>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <button
+                  onClick={refreshAgendaNow}
+                  style={{
+                    padding:"4px 8px",
+                    borderRadius:999,
+                    border:`1px solid ${syncStatus.mode==="error" ? "#FECACA" : syncStatus.mode==="ok" ? "#BBF7D0" : "#DCE7F5"}`,
+                    background:syncStatus.mode==="error" ? "#FEF2F2" : syncStatus.mode==="ok" ? "#ECFDF5" : "#F8FAFC",
+                    color:syncStatus.mode==="error" ? "#B91C1C" : syncStatus.mode==="ok" ? "#166534" : "#334155",
+                    fontSize:9,
+                    fontWeight:700,
+                    cursor:"pointer",
+                    whiteSpace:"nowrap"
+                  }}
+                  title={syncStatus.message}
+                >
+                  {syncStatus.mode==="ok" ? "Sincronizado" : syncStatus.mode==="error" ? "Sem sync" : "Sincronizando"}
+                </button>
+                <div style={{display:"flex",gap:3}}>
+                <button onClick={()=>setFilterFrente(null)} style={{padding:"5px 10px",borderRadius:20,border:!filterFrente?"1px solid rgba(12,26,47,0.18)":`1px solid ${UI.line}`,fontSize:9,fontWeight:700,cursor:"pointer",background:!filterFrente?UI.darkA:UI.surface,color:!filterFrente?"#fff":UI.muted,boxShadow:!filterFrente?UI.shadowSm:"none"}}>Todas</button>
+                {Object.entries(FRENTES).map(([k,v])=><button key={k} onClick={()=>setFilterFrente(k)} style={{padding:"5px 10px",borderRadius:20,border:`1px solid ${filterFrente===k?FAC(k):UI.line}`,fontSize:9,fontWeight:700,cursor:"pointer",background:filterFrente===k?FBG(k):UI.surface,color:filterFrente===k?FC(k):UI.muted}}>{v.split(" ").pop()}</button>)}
+                </div>
               </div>
             </div>
-            {renderTaskList(filtered,today())}
+            {syncStatus.mode==="error"&&(
+              <div style={{marginBottom:8,padding:"8px 10px",borderRadius:10,border:"1px solid #FECACA",background:"#FEF2F2",color:"#B91C1C",fontSize:11,fontWeight:600}}>
+                {syncStatus.message}
+              </div>
+            )}
+            {isWideDashboard?renderTaskBoard(filtered,today()):renderTaskList(filtered,today())}
+            {lastSyncAt&&(
+              <div style={{marginTop:8,fontSize:10,color:UI.muted}}>
+                Última sincronização: {new Date(lastSyncAt).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})}
+              </div>
+            )}
           </div>
         </>}
 
@@ -976,7 +1427,7 @@ export default function SERSystem() {
     </div>
 
     {/* FAB */}
-    <button onClick={()=>{SoundEngine.play("click");setShowNewTask(true);}} style={{position:"fixed",bottom:72,right:Math.max(16,(typeof window!=="undefined"?(window.innerWidth-600)/2:16)),width:52,height:52,borderRadius:"50%",border:"none",background:"#1A1A18",color:"#fff",fontSize:24,fontWeight:300,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 4px 16px rgba(0,0,0,0.2)",zIndex:90}}>+</button>
+    <button onClick={()=>{SoundEngine.play("click");setShowNewTask(true);}} style={{position:"fixed",bottom:72,right:Math.max(16,(typeof window!=="undefined"?(window.innerWidth-layoutMaxWidth)/2:16)),width:52,height:52,borderRadius:"50%",border:"none",background:UI.darkA,color:"#fff",fontSize:24,fontWeight:300,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:UI.shadowLg,zIndex:90}}>+</button>
 
     <BottomNav view={view} setView={v=>{setView(v);setFilterFrente(null);setExpandedTask(null);}}/>
     {showNewTask&&<NewTaskModal onClose={()=>setShowNewTask(false)} onAdd={task=>setData(d=>({...d,tasks:[...d.tasks,task]}))} sops={data.sops} defaultDate={view==="day"?selectedDate:today()}/>}

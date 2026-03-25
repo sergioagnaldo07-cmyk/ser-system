@@ -1,9 +1,11 @@
 node_modules
-.env
 dist
+.git
+.gitignore
+.env
+.dev.log
 .wwebjs_auth
 .wwebjs_cache
 .tools
-.dev.log
 data/agenda.json
 data/usage-log.json
