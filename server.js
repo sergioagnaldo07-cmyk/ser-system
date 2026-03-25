@@ -107,6 +107,7 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || '').trim();
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 const SUPABASE_TASKS_TABLE = String(process.env.SUPABASE_TASKS_TABLE || 'ser_tasks').trim();
 const SUPABASE_USAGE_TABLE = String(process.env.SUPABASE_USAGE_TABLE || 'ser_usage_events').trim();
+const SUPABASE_ENERGY_TABLE = String(process.env.SUPABASE_ENERGY_TABLE || 'ser_energy_checkins').trim();
 const SUPABASE_USAGE_MAX_ROWS = Number(process.env.SUPABASE_USAGE_MAX_ROWS || 12000);
 const RAW_DATA_DIR = String(process.env.SER_DATA_DIR || '').trim();
 const DATA_DIR = RAW_DATA_DIR
@@ -122,7 +123,9 @@ if (STORAGE_MODE === 'supabase' && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)
 
 const AGENDA_FILE = path.join(DATA_DIR, 'agenda.json');
 const USAGE_FILE = path.join(DATA_DIR, 'usage-log.json');
+const ENERGY_FILE = path.join(DATA_DIR, 'energy-checkins.json');
 const ALLOWED_FRENTES = new Set(['taka', 'haldan', 'pessoal']);
+const ENERGY_LEVELS = new Set(['alta', 'media', 'baixa']);
 const FRENTES = Object.freeze({
   taka: 'Estúdio Taka',
   haldan: 'Haldan',
@@ -1582,6 +1585,29 @@ function isAffirmativeFollowUpAnswer(text = '') {
   );
 }
 
+function normalizeEnergyLevel(value = '') {
+  const level = normalizeText(value);
+  if (ENERGY_LEVELS.has(level)) return level;
+  return 'media';
+}
+
+function detectEnergyCheckin(text = '') {
+  const n = normalizeText(text);
+  if (!n) return null;
+
+  if (/\b(energia alta|disposto|animado|produtivo|focado)\b/.test(n)) {
+    return { energyLevel: 'alta' };
+  }
+  if (/\b(energia media|energia normal|normal|ok|tranquilo|mais ou menos)\b/.test(n)) {
+    return { energyLevel: 'media' };
+  }
+  if (/\b(energia baixa|cansado|exausto|esgotado|sem energia|travado|desanimado)\b/.test(n)) {
+    return { energyLevel: 'baixa' };
+  }
+
+  return null;
+}
+
 function cleanupPendingDailyFollowups() {
   const now = Date.now();
   pendingDailyFollowupQueue = pendingDailyFollowupQueue.filter((item) => now - item.createdAt < 48 * 60 * 60 * 1000);
@@ -2023,6 +2049,32 @@ function fromSupabaseUsageRow(row = {}) {
   };
 }
 
+function toSupabaseEnergyRow(checkin = {}) {
+  return {
+    id: checkin.id || crypto.randomUUID(),
+    date: normalizeDate(checkin.date || todayLocalISO()),
+    time: normalizeTime(checkin.time || '00:00') || '00:00',
+    energy_level: normalizeEnergyLevel(checkin.energyLevel || 'media'),
+    mood: checkin.mood ? String(checkin.mood).trim() : null,
+    note: checkin.note ? String(checkin.note).trim() : null,
+    source: checkin.source ? String(checkin.source).trim() : 'app',
+    created_at: checkin.createdAt || nowISO(),
+  };
+}
+
+function fromSupabaseEnergyRow(row = {}) {
+  return {
+    id: row.id || crypto.randomUUID(),
+    date: normalizeDate(row.date || todayLocalISO()),
+    time: normalizeTime(row.time || '00:00') || '00:00',
+    energyLevel: normalizeEnergyLevel(row.energy_level || 'media'),
+    mood: row.mood || null,
+    note: row.note || null,
+    source: row.source || 'app',
+    createdAt: row.created_at || nowISO(),
+  };
+}
+
 async function ensureSupabaseTables() {
   if (!isUsingSupabaseStorage() || supabaseTablesChecked) return;
 
@@ -2040,6 +2092,14 @@ async function ensureSupabaseTables() {
     .limit(1);
   if (usageError) {
     throw new Error(`Falha ao acessar tabela "${SUPABASE_USAGE_TABLE}" no Supabase: ${usageError.message}`);
+  }
+
+  const { error: energyError } = await supabase
+    .from(SUPABASE_ENERGY_TABLE)
+    .select('id')
+    .limit(1);
+  if (energyError) {
+    throw new Error(`Falha ao acessar tabela "${SUPABASE_ENERGY_TABLE}" no Supabase: ${energyError.message}`);
   }
 
   supabaseTablesChecked = true;
@@ -2124,6 +2184,55 @@ async function appendUsageEventFile(event = {}) {
     JSON.stringify({ updatedAt: nowISO(), events }, null, 2),
     'utf8'
   );
+}
+
+async function ensureEnergyStorageFile() {
+  await fs.mkdir(path.dirname(ENERGY_FILE), { recursive: true });
+  try {
+    await fs.access(ENERGY_FILE);
+  } catch {
+    await fs.writeFile(
+      ENERGY_FILE,
+      JSON.stringify({ updatedAt: nowISO(), checkins: [] }, null, 2),
+      'utf8'
+    );
+  }
+}
+
+async function readEnergyDataFile() {
+  await ensureEnergyStorageFile();
+  try {
+    const raw = await fs.readFile(ENERGY_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const checkins = Array.isArray(parsed.checkins) ? parsed.checkins : [];
+    return { updatedAt: parsed.updatedAt || null, checkins };
+  } catch {
+    return { updatedAt: null, checkins: [] };
+  }
+}
+
+async function appendEnergyCheckinFile(checkin = {}) {
+  await ensureEnergyStorageFile();
+  const current = await readEnergyDataFile();
+  const safe = {
+    id: checkin.id || crypto.randomUUID(),
+    date: normalizeDate(checkin.date || todayLocalISO()),
+    time: normalizeTime(checkin.time || '00:00') || '00:00',
+    energyLevel: normalizeEnergyLevel(checkin.energyLevel || 'media'),
+    mood: checkin.mood ? String(checkin.mood).trim() : null,
+    note: checkin.note ? String(checkin.note).trim() : null,
+    source: checkin.source ? String(checkin.source).trim() : 'app',
+    createdAt: checkin.createdAt || nowISO(),
+  };
+  const checkins = [...current.checkins, safe]
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+    .slice(-5000);
+  await fs.writeFile(
+    ENERGY_FILE,
+    JSON.stringify({ updatedAt: nowISO(), checkins }, null, 2),
+    'utf8'
+  );
+  return safe;
 }
 
 async function ensureAgendaStorage() {
@@ -2225,6 +2334,19 @@ async function ensureUsageStorage() {
   }
 }
 
+async function ensureEnergyStorage() {
+  if (!isUsingSupabaseStorage()) {
+    await ensureEnergyStorageFile();
+    return;
+  }
+  try {
+    await ensureSupabaseTables();
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'energy');
+    await ensureEnergyStorageFile();
+  }
+}
+
 async function readUsageData() {
   if (!isUsingSupabaseStorage()) {
     return readUsageDataFile();
@@ -2270,6 +2392,46 @@ async function appendUsageEvent(event = {}) {
   } catch (err) {
     fallbackSupabaseToFile(err, 'appendUsageEvent');
     await appendUsageEventFile(event);
+  }
+}
+
+async function readEnergyData() {
+  if (!isUsingSupabaseStorage()) {
+    return readEnergyDataFile();
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const { data, error } = await supabase
+      .from(SUPABASE_ENERGY_TABLE)
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(2000);
+    if (error) throw new Error(error.message);
+    const checkins = Array.isArray(data) ? data.map(fromSupabaseEnergyRow) : [];
+    return { updatedAt: nowISO(), checkins };
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'readEnergyData');
+    return readEnergyDataFile();
+  }
+}
+
+async function appendEnergyCheckin(checkin = {}) {
+  if (!isUsingSupabaseStorage()) {
+    return appendEnergyCheckinFile(checkin);
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const row = toSupabaseEnergyRow(checkin);
+    const { error } = await supabase
+      .from(SUPABASE_ENERGY_TABLE)
+      .insert(row);
+    if (error) throw new Error(error.message);
+    return fromSupabaseEnergyRow(row);
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'appendEnergyCheckin');
+    return appendEnergyCheckinFile(checkin);
   }
 }
 
@@ -3711,6 +3873,47 @@ async function processWhatsAppMessage({ text, sourceType = 'text', senderNumber 
   const userPayload = trimTextForModel(rawUserPayload, 1000);
   const likelyMutatingIntent = hasMutatingIntentText(userText);
 
+  const energyCheckin = detectEnergyCheckin(userText);
+  if (energyCheckin) {
+    const now = new Date();
+    const saved = await appendEnergyCheckin({
+      id: crypto.randomUUID(),
+      date: todayLocalISO(),
+      time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+      energyLevel: energyCheckin.energyLevel,
+      mood: null,
+      note: trimTextForModel(userText, 180),
+      source: 'whatsapp',
+      createdAt: now.toISOString(),
+    });
+
+    if (saved.energyLevel === 'baixa') {
+      return buildWhatsAppResponsePayload(
+        ensureWhatsAppResponseStyle(
+          'Entendi, senhor. Energia baixa agora. Sugiro tarefas leves por alguns minutos. Quer que eu indique o melhor próximo passo?',
+          { question: 'Quer ver as tarefas mais leves do dia?' }
+        ),
+        '⚡'
+      );
+    }
+    if (saved.energyLevel === 'alta') {
+      return buildWhatsAppResponsePayload(
+        ensureWhatsAppResponseStyle(
+          'Boa, senhor. Energia alta é hora de atacar o mais importante. Quer que eu mostre as prioridades agora?',
+          { question: 'Quer ver as tarefas prioritárias do dia?' }
+        ),
+        '⚡'
+      );
+    }
+    return buildWhatsAppResponsePayload(
+      ensureWhatsAppResponseStyle(
+        'Perfeito, senhor. Registrei energia média. Vamos manter ritmo constante e pausas curtas.',
+        { question: 'Quer que eu escolha o próximo foco para o senhor?' }
+      ),
+      '⚡'
+    );
+  }
+
   if (hasPriorityIntent(userText)) {
     return buildWhatsAppResponsePayload(agendaAwarePriorityMessage(tasks), ACTION_REACTIONS.list);
   }
@@ -3792,10 +3995,16 @@ async function processWhatsAppMessage({ text, sourceType = 'text', senderNumber 
     };
   }
 
+  const energyData = await readEnergyData();
+  const allCheckins = Array.isArray(energyData.checkins) ? energyData.checkins : [];
+  const todaysCheckins = allCheckins.filter((item) => item?.date === todayLocalISO());
+  const latestEnergy = (todaysCheckins[todaysCheckins.length - 1] || allCheckins[allCheckins.length - 1] || {}).energyLevel || null;
+
   const prompt = `${WHATSAPP_AGENT_PROMPT}
 
 DATA_ATUAL: ${todayLocalISO()}
 CONTEXTO_AGENDA_DISPONIVEL: ${includeAgendaContext ? 'true' : 'false'}
+ENERGIA_ATUAL: ${latestEnergy || 'não informada'}
 AGENDA_ATUAL:
 ${agendaContext}`;
 
@@ -4088,6 +4297,7 @@ app.get('/api/health', (_req, res) => {
       dataDir: DATA_DIR,
       tasksTable: SUPABASE_TASKS_TABLE,
       usageTable: SUPABASE_USAGE_TABLE,
+      energyTable: SUPABASE_ENERGY_TABLE,
     },
     openai: {
       configured: Boolean(API_KEY),
@@ -4198,6 +4408,41 @@ app.delete('/api/agenda/tasks/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// ─── Energy Check-ins ───
+app.post('/api/energy/checkin', requireReadAccess, async (req, res) => {
+  try {
+    const { energyLevel, mood, note, source } = req.body || {};
+    const now = new Date();
+    const checkin = await appendEnergyCheckin({
+      id: crypto.randomUUID(),
+      date: todayLocalISO(),
+      time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+      energyLevel: normalizeEnergyLevel(energyLevel),
+      mood: mood ? String(mood).trim() : null,
+      note: note ? trimTextForModel(String(note), 240) : null,
+      source: source ? String(source).trim() : 'app',
+      createdAt: now.toISOString(),
+    });
+    return res.json({ ok: true, checkin });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/energy/today', requireReadAccess, async (_req, res) => {
+  try {
+    const today = todayLocalISO();
+    const energy = await readEnergyData();
+    const checkins = (energy.checkins || [])
+      .filter((item) => item?.date === today)
+      .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+    const lastEnergy = checkins.length > 0 ? checkins[checkins.length - 1].energyLevel : null;
+    return res.json({ checkins, lastEnergy });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP — Endpoints (whatsapp-web.js)
 // ═══════════════════════════════════════════════════════════════
@@ -4248,6 +4493,7 @@ app.post('/api/whatsapp/config', requireAdmin, (_req, res) => {
 
 await ensureAgendaStorage();
 await ensureUsageStorage();
+await ensureEnergyStorage();
 
 app.listen(PORT, () => {
   console.log('');

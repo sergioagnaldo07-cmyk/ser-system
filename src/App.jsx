@@ -130,6 +130,7 @@ const SoundEngine = {
       "chat-receive":()=>{ this._osc(600,"sine",0.1,0.08); setTimeout(()=>this._osc(700,"sine",0.1,0.06),100); },
       "chat-tasks-found":()=>{ this._osc(523,"sine",0.15,0.1); setTimeout(()=>this._osc(659,"sine",0.15,0.08),100); setTimeout(()=>this._osc(784,"sine",0.2,0.1),200); },
       "note-save":()=>this._osc(660,"sine",0.12,0.08),
+      "energy-checkin":()=>{ this._osc(520,"sine",0.12,0.08); setTimeout(()=>this._osc(620,"sine",0.1,0.07),90); },
       "celebration":()=>{ [523,587,659,698,784].forEach((f,i)=>setTimeout(()=>this._osc(f,"sine",0.3,0.1),i*100)); },
     };
     if(s[t]) s[t]();
@@ -522,6 +523,31 @@ function ActiveBlockIndicator() {
   return <div style={{background:f?FBG(f):UI.surfaceSoft,borderRadius:14,padding:"10px 14px",display:"flex",alignItems:"center",gap:8,border:`1px solid ${f?FAC(f):UI.line}`,boxShadow:UI.shadowSm}}>
     <div style={{width:8,height:8,borderRadius:"50%",background:f?FC(f):"#5F5E5A",boxShadow:`0 0 6px ${f?FC(f)+"50":"transparent"}`}}/>
     <div><div style={{fontSize:12,fontWeight:600,color:f?FDK(f):UI.ink}}>{b.label}</div><div style={{fontSize:10,color:f?FC(f):UI.muted}}>{b.time}</div></div>
+  </div>;
+}
+
+function EnergyCheckin({lastEnergy,onCheckin,isSaving,error}) {
+  const levels=[
+    {id:"alta",label:"⚡ Alta",desc:"Atacar prioridade"},
+    {id:"media",label:"😊 Normal",desc:"Ritmo constante"},
+    {id:"baixa",label:"😴 Baixa",desc:"Tarefas leves"},
+  ];
+
+  return <div style={{background:`linear-gradient(180deg, ${UI.surface} 0%, ${UI.surfaceSoft} 100%)`,border:`1px solid ${UI.lineSoft}`,borderRadius:14,padding:"10px 12px",boxShadow:UI.shadowSm}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:UI.ink}}>Check-in de energia</div>
+        <div style={{fontSize:10,color:UI.muted}}>Ajusta as sugestões do coach</div>
+      </div>
+      {lastEnergy&&<span style={{fontSize:10,fontWeight:700,color:UI.inkSoft,background:"#EDF2FA",padding:"3px 8px",borderRadius:999}}>Último: {lastEnergy}</span>}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:6}}>
+      {levels.map(level=><button key={level.id} onClick={()=>onCheckin(level.id)} disabled={isSaving} style={{padding:"8px 6px",borderRadius:10,border:`1px solid ${lastEnergy===level.id?"#8EA7FF":UI.line}`,background:lastEnergy===level.id?"#EEF2FF":"#fff",color:UI.ink,fontSize:11,fontWeight:700,cursor:isSaving?"not-allowed":"pointer",opacity:isSaving?0.6:1}}>
+        <div>{level.label}</div>
+        <div style={{fontSize:9,color:UI.muted,fontWeight:600,marginTop:2}}>{level.desc}</div>
+      </button>)}
+    </div>
+    {error&&<div style={{marginTop:6,fontSize:10,color:"#B91C1C",fontWeight:600}}>{error}</div>}
   </div>;
 }
 
@@ -1084,6 +1110,7 @@ export default function SERSystem() {
   const[syncReady,setSyncReady]=useState(false);
   const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
   const[lastSyncAt,setLastSyncAt]=useState(null);
+  const[energyState,setEnergyState]=useState({checkins:[],lastEnergy:null,loading:false,error:null});
   const[viewportWidth,setViewportWidth]=useState(typeof window!=="undefined"?window.innerWidth:900);
   const syncHashRef=useRef(null);
   const streak=useMemo(()=>updateStreak(),[]);
@@ -1098,6 +1125,7 @@ export default function SERSystem() {
     window.addEventListener("resize",onResize);
     return()=>window.removeEventListener("resize",onResize);
   },[]);
+  useEffect(()=>{loadEnergyToday();},[loadEnergyToday]);
 
   const applyRemoteSnapshot = useCallback((remoteTasks = []) => {
     setData(prev => {
@@ -1135,6 +1163,46 @@ export default function SERSystem() {
       setSyncStatus({ mode: "error", message: friendly });
     }
   }, [pullRemoteAgenda]);
+
+  const loadEnergyToday = useCallback(async () => {
+    try {
+      const r = await apiFetch("/api/energy/today");
+      if (!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(() => ({}));
+      const checkins = Array.isArray(d?.checkins) ? d.checkins : [];
+      const lastEnergy = typeof d?.lastEnergy === "string" ? d.lastEnergy : null;
+      setEnergyState(prev => ({ ...prev, checkins, lastEnergy, error: null }));
+    } catch (err) {
+      const message = String(err?.message || "Falha ao buscar energia.");
+      setEnergyState(prev => ({ ...prev, error: /nao autorizado|não autorizado/i.test(message) ? "Sem permissão para check-in." : "Sem conexão para check-in agora." }));
+    }
+  }, []);
+
+  const submitEnergyCheckin = useCallback(async (energyLevel) => {
+    if(!energyLevel) return;
+    setEnergyState(prev => ({ ...prev, loading:true, error:null }));
+    try {
+      const r = await apiFetch("/api/energy/checkin",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({energyLevel,source:"app"}),
+      });
+      if(!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>({}));
+      const checkin = d?.checkin || null;
+      setEnergyState(prev => {
+        const nextCheckins = checkin ? [...(prev.checkins||[]), checkin] : (prev.checkins || []);
+        const sorted = nextCheckins.sort((a,b)=>String(a?.time||"").localeCompare(String(b?.time||"")));
+        const lastEnergy = checkin?.energyLevel || prev.lastEnergy || energyLevel;
+        return {...prev,checkins:sorted,lastEnergy,loading:false,error:null};
+      });
+      SoundEngine.play("energy-checkin");
+      setToast({message:`Energia registrada: ${energyLevel}.`});
+    } catch (err) {
+      const message = String(err?.message || "Falha ao salvar energia.");
+      setEnergyState(prev => ({...prev,loading:false,error:/nao autorizado|não autorizado/i.test(message)?"Sem permissão para check-in.":"Não consegui salvar o check-in agora."}));
+    }
+  }, []);
 
   useEffect(()=>{
     let active=true;
@@ -1311,6 +1379,15 @@ export default function SERSystem() {
           </div>
 
           <div style={{marginBottom:12}}><ActiveBlockIndicator/></div>
+
+          <div style={{marginBottom:12}}>
+            <EnergyCheckin
+              lastEnergy={energyState.lastEnergy}
+              onCheckin={submitEnergyCheckin}
+              isSaving={energyState.loading}
+              error={energyState.error}
+            />
+          </div>
 
           <DashboardChat onAddTasks={tasks=>setData(d=>({...d,tasks:[...d.tasks,...tasks]}))} sops={data.sops}/>
 

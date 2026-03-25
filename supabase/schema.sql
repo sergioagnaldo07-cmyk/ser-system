@@ -47,5 +47,19 @@ create table if not exists public.ser_usage_events (
 create index if not exists ser_usage_events_ts_idx on public.ser_usage_events (ts desc);
 create index if not exists ser_usage_events_kind_idx on public.ser_usage_events (usage_kind);
 
+create table if not exists public.ser_energy_checkins (
+  id text primary key default gen_random_uuid()::text,
+  date text not null,
+  time text not null,
+  energy_level text not null,
+  mood text,
+  note text,
+  source text default 'whatsapp',
+  created_at timestamptz default now()
+);
+
+create index if not exists ser_energy_checkins_date_idx on public.ser_energy_checkins (date desc);
+
 alter table public.ser_tasks disable row level security;
 alter table public.ser_usage_events disable row level security;
+alter table public.ser_energy_checkins disable row level security;

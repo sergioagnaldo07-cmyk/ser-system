@@ -7,3 +7,4 @@ dist
 .dev.log
 data/agenda.json
 data/usage-log.json
+data/energy-checkins.json
