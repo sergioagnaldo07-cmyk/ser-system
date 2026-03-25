@@ -599,6 +599,22 @@ function GamificationWidget({data}) {
   </div>;
 }
 
+function BurnoutIndicator({data}) {
+  const score = Number(data?.score || 0);
+  const level = String(data?.level || "saudavel");
+  const map = {
+    saudavel:{emoji:"🟢",label:"Saudável",color:"#166534",bg:"#ECFDF5",bd:"#BBF7D0"},
+    atencao:{emoji:"🟡",label:"Atenção",color:"#92400E",bg:"#FFFBEB",bd:"#FDE68A"},
+    critico:{emoji:"🔴",label:"Crítico",color:"#B91C1C",bg:"#FEF2F2",bd:"#FECACA"},
+  };
+  const cfg = map[level] || map.saudavel;
+  return <div style={{display:"inline-flex",alignItems:"center",gap:5,padding:"4px 8px",borderRadius:999,border:`1px solid ${cfg.bd}`,background:cfg.bg,color:cfg.color,fontSize:10,fontWeight:700}} title={data?.suggestion||"Risco de burnout"}>
+    <span>{cfg.emoji}</span>
+    <span>{cfg.label}</span>
+    <span>{score}</span>
+  </div>;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // TASK CARD
 // ═══════════════════════════════════════════════════════════════
@@ -1162,6 +1178,7 @@ export default function SERSystem() {
   const[selectedDate,setSelectedDate]=useState(today());
   const[editingTask,setEditingTask]=useState(null);
   const[gamification,setGamification]=useState({xp:0,level:1,levelTitle:"Iniciante",currentStreak:0,badges:[],latestBadge:null,nextLevel:null});
+  const[burnoutState,setBurnoutState]=useState({score:0,level:"saudavel",suggestion:""});
   const[syncReady,setSyncReady]=useState(false);
   const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
   const[lastSyncAt,setLastSyncAt]=useState(null);
@@ -1187,6 +1204,11 @@ export default function SERSystem() {
   },[]);
   useEffect(()=>{loadEnergyToday();},[loadEnergyToday]);
   useEffect(()=>{loadGamificationStatus();},[loadGamificationStatus]);
+  useEffect(()=>{loadBurnoutScore();},[loadBurnoutScore]);
+  useEffect(()=>{
+    const iv=setInterval(()=>{loadBurnoutScore();},180000);
+    return()=>clearInterval(iv);
+  },[loadBurnoutScore]);
   useEffect(()=>{
     const prev = prevGamificationRef.current;
     const levelNow = Number(gamification.level || 1);
@@ -1279,6 +1301,21 @@ export default function SERSystem() {
       setGamification(prev => ({ ...prev, ...d }));
     } catch {
       // silencioso: widget é complementar
+    }
+  }, []);
+
+  const loadBurnoutScore = useCallback(async () => {
+    try {
+      const r = await apiFetch("/api/burnout/score");
+      if (!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>({}));
+      setBurnoutState({
+        score:Number(d?.score||0),
+        level:String(d?.level||"saudavel"),
+        suggestion:String(d?.suggestion||""),
+      });
+    } catch {
+      // silencioso
     }
   }, []);
 
@@ -1609,6 +1646,7 @@ export default function SERSystem() {
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <h3 style={{margin:0,fontSize:14,fontWeight:700,color:UI.ink}}>Tarefas de hoje</h3>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <BurnoutIndicator data={burnoutState}/>
                 <button
                   onClick={refreshAgendaNow}
                   style={{

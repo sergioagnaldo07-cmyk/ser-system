@@ -4226,6 +4226,82 @@ async function buildWeeklyCostReportMessage() {
   });
 }
 
+async function calculateBurnoutScore() {
+  const today = todayLocalISO();
+  const agenda = await readAgendaData();
+  const tasks = Array.isArray(agenda.tasks) ? agenda.tasks : [];
+
+  let score = 0;
+  const factors = [];
+
+  const todayTasks = tasks.filter((task) => !task.completedAt && task.date === today);
+  const todayMinutes = todayTasks.reduce((sum, task) => sum + (Number(task.estimatedTime || 30) || 30), 0);
+  if (todayMinutes > 480) {
+    score += 30;
+    factors.push('Planejamento do dia acima de 8h.');
+  } else if (todayMinutes > 360) {
+    score += 15;
+    factors.push('Planejamento do dia acima de 6h.');
+  }
+
+  const overdue = tasks.filter((task) => !task.completedAt && task.date < today);
+  if (overdue.length > 0) {
+    const overdueScore = Math.min(25, overdue.length * 5);
+    score += overdueScore;
+    factors.push(`${overdue.length} tarefa(s) atrasada(s).`);
+  }
+
+  const last7 = Array.from({ length: 7 }, (_, idx) => addDaysISO(today, -idx));
+  const completedAfter20 = tasks.filter((task) => {
+    if (!task.completedAt) return false;
+    const datePart = String(task.completedAt).slice(0, 10);
+    if (!last7.includes(datePart)) return false;
+    const d = new Date(task.completedAt);
+    if (Number.isNaN(d.getTime())) return false;
+    return d.getHours() >= 20;
+  });
+  if (completedAfter20.length > 0) {
+    score += 10;
+    factors.push('Atividade recorrente após 20h nos últimos 7 dias.');
+  }
+
+  const hasDayOff = last7.some((dateKey) => {
+    const dayTasks = tasks.filter((task) => task.date === dateKey);
+    return dayTasks.length === 0;
+  });
+  if (!hasDayOff) {
+    score += 15;
+    factors.push('Sem dia de descanso na última semana.');
+  }
+
+  const heavyDays = last7.filter((dateKey) => {
+    const dayMinutes = tasks
+      .filter((task) => task.date === dateKey)
+      .reduce((sum, task) => sum + (Number(task.actualTime || task.estimatedTime || 30) || 30), 0);
+    return dayMinutes > 360;
+  }).length;
+  if (heavyDays > 0) {
+    const heavyScore = Math.min(20, heavyDays * 2);
+    score += heavyScore;
+    factors.push(`${heavyDays} dia(s) acima de 6h na última semana.`);
+  }
+
+  const finalScore = Math.min(100, score);
+  const level = finalScore > 70 ? 'critico' : finalScore > 40 ? 'atencao' : 'saudavel';
+  const suggestion = finalScore > 70
+    ? 'Sergio, o senhor precisa desacelerar. Sugiro cancelar tarefas não essenciais hoje.'
+    : finalScore > 40
+      ? 'Carga um pouco pesada. Quer que eu redistribua algo pra amanhã?'
+      : 'Tudo sob controle. Bora!';
+
+  return {
+    score: finalScore,
+    level,
+    factors,
+    suggestion,
+  };
+}
+
 async function transcribeAudioForWhatsApp({ base64Data, mimeType, fileName } = {}) {
   if (!API_KEY) {
     throw new Error('OPENAI_API_KEY não configurada. Defina a chave no .env para transcrever áudio.');
@@ -5385,6 +5461,15 @@ app.get('/api/review/weekly', requireReadAccess, async (_req, res) => {
   try {
     const payload = await buildWeeklyReviewPayload({ withNarrative: true });
     return res.json(payload);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/burnout/score', requireReadAccess, async (_req, res) => {
+  try {
+    const result = await calculateBurnoutScore();
+    return res.json(result);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
