@@ -379,6 +379,8 @@ function normalizeTaskShape(task, sops = DEFAULT_SOPS) {
     followUpTime: typeof task.followUpTime === "string" && /^\d{2}:\d{2}$/.test(task.followUpTime) ? task.followUpTime : null,
     followUpClient: task.followUpClient ? String(task.followUpClient) : null,
     followUpSubject: task.followUpSubject ? String(task.followUpSubject) : null,
+    actualTime: Number.isFinite(Number(task.actualTime)) ? Math.max(0, Number(task.actualTime)) : 0,
+    pomodorosCompleted: Number.isFinite(Number(task.pomodorosCompleted)) ? Math.max(0, Number(task.pomodorosCompleted)) : 0,
     steps,
     estimatedTime,
     createdAt: task.createdAt || new Date().toISOString(),
@@ -400,6 +402,8 @@ function serializeTasksForSync(tasks = []) {
     followUpTime: task.followUpTime || null,
     followUpClient: task.followUpClient || null,
     followUpSubject: task.followUpSubject || null,
+    actualTime: Number.isFinite(Number(task.actualTime)) ? Number(task.actualTime) : 0,
+    pomodorosCompleted: Number.isFinite(Number(task.pomodorosCompleted)) ? Number(task.pomodorosCompleted) : 0,
     estimatedTime: task.estimatedTime || 0,
     completedAt: task.completedAt || null,
     createdAt: task.createdAt || null,
@@ -481,9 +485,11 @@ function DailyProgressRing({done,total}) {
 // ═══════════════════════════════════════════════════════════════
 // COMPACT POMODORO (side by side with stats)
 // ═══════════════════════════════════════════════════════════════
-function PomodoroCompact({pom,totalEstimate}) {
+function PomodoroCompact({pom,totalEstimate,tasksToday=[],selectedTaskId,onSelectTask,onTogglePomodoro,onResetPomodoro,timeLogBusy=false}) {
   const target=Math.max(1,Math.ceil((totalEstimate||50)/25));
   const col=pom.mode==="work"?"#5DCAA5":"#AFA9EC";
+  const selectedTask = (tasksToday||[]).find(t=>t.id===selectedTaskId) || null;
+  const options = (tasksToday||[]).filter(t=>!t.completedAt);
   return <div style={{background:`linear-gradient(165deg, ${UI.darkA} 0%, ${UI.darkB} 100%)`,borderRadius:18,padding:"16px",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flex:1,minHeight:140,border:"1px solid rgba(255,255,255,0.08)",boxShadow:UI.shadowLg}}>
     <div style={{fontSize:9,fontWeight:600,color:"rgba(255,255,255,0.35)",textTransform:"uppercase",letterSpacing:"0.12em",marginBottom:8}}>{pom.mode==="work"?"Foco":"Pausa"}</div>
     <div style={{position:"relative",display:"inline-block"}}>
@@ -492,11 +498,18 @@ function PomodoroCompact({pom,totalEstimate}) {
         <div style={{fontFamily:"'SF Mono','Fira Code',monospace",fontSize:22,fontWeight:300,color:"#fff"}} className={pom.running?"ser-pulse":""}>{pom.display}</div>
       </div>
     </div>
+    <div style={{width:"100%",marginTop:8,marginBottom:6}}>
+      <select value={selectedTaskId||""} onChange={e=>onSelectTask&&onSelectTask(e.target.value)} style={{width:"100%",padding:"7px 8px",borderRadius:9,border:"1px solid rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.12)",color:"#fff",fontSize:11}}>
+        <option value="" style={{color:"#111"}}>Selecione a tarefa do foco</option>
+        {options.map(t=><option key={t.id} value={t.id} style={{color:"#111"}}>{t.title}</option>)}
+      </select>
+      {selectedTask&&<div style={{fontSize:10,color:"rgba(255,255,255,0.55)",marginTop:4}}>⏱ {selectedTask.pomodorosCompleted||0}/{Math.max(1,Math.ceil((selectedTask.estimatedTime||25)/25))} · {selectedTask.actualTime||0}min reais</div>}
+    </div>
     <div style={{display:"flex",gap:4,margin:"8px 0 4px"}}>{Array.from({length:Math.min(target,8)}).map((_,i)=><div key={i} style={{width:6,height:6,borderRadius:"50%",background:i<pom.cycles?"#5DCAA5":"rgba(255,255,255,0.15)"}}/>)}</div>
     <div style={{fontSize:10,color:"rgba(255,255,255,0.3)",marginBottom:10}}>Ciclo {pom.cycles} de {target}</div>
     <div style={{display:"flex",gap:6}}>
-      <button onClick={pom.toggle} style={{background:pom.running?"rgba(255,255,255,0.12)":"#fff",color:pom.running?"#fff":"#1A1A18",border:"none",borderRadius:10,padding:"7px 16px",fontSize:12,fontWeight:600,cursor:"pointer"}}>{pom.running?"⏸":"▶"}</button>
-      <button onClick={pom.reset} style={{background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.5)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:12,cursor:"pointer"}}>↻</button>
+      <button onClick={()=>onTogglePomodoro&&onTogglePomodoro()} disabled={timeLogBusy} style={{background:pom.running?"rgba(255,255,255,0.12)":"#fff",color:pom.running?"#fff":"#1A1A18",border:"none",borderRadius:10,padding:"7px 16px",fontSize:12,fontWeight:600,cursor:timeLogBusy?"not-allowed":"pointer",opacity:timeLogBusy?0.65:1}}>{pom.running?"⏸":"▶"}</button>
+      <button onClick={()=>onResetPomodoro?onResetPomodoro():pom.reset()} disabled={timeLogBusy} style={{background:"rgba(255,255,255,0.08)",color:"rgba(255,255,255,0.5)",border:"none",borderRadius:10,padding:"7px 12px",fontSize:12,cursor:timeLogBusy?"not-allowed":"pointer",opacity:timeLogBusy?0.65:1}}>↻</button>
     </div>
   </div>;
 }
@@ -557,6 +570,9 @@ function EnergyCheckin({lastEnergy,onCheckin,isSaving,error}) {
 function TaskCard({task,expanded,onToggleExpand,onToggleStep,onComplete,onDelete,onReschedule,onEdit,sops,index,postIt=false}) {
   const pct=task.steps?Math.round(task.steps.filter(s=>s.done).length/task.steps.length*100):0;
   const dateLabel = task.date !== today() ? getDateLabel(task.date) : null;
+  const pomodorosDone = Number(task.pomodorosCompleted || 0);
+  const actualTime = Number(task.actualTime || 0);
+  const pomodoroTarget = Math.max(1,Math.ceil((Number(task.estimatedTime || 25))/25));
   return <div className="ser-slideUp" style={{
     background:postIt?`linear-gradient(180deg, ${FBG(task.frente)} 0%, ${UI.surface} 88%)`:UI.surface,
     border:postIt?`1px solid ${FAC(task.frente)}`:`1px solid ${UI.lineSoft}`,
@@ -578,6 +594,9 @@ function TaskCard({task,expanded,onToggleExpand,onToggleStep,onComplete,onDelete
           <div style={{display:"flex",gap:4,alignItems:"center",marginTop:5,flexWrap:"wrap"}}>
             <FrentePill frente={task.frente} small/>
             {dateLabel && <span style={{fontSize:10,padding:"2px 8px",borderRadius:20,background:"#FFF8E7",color:UI.warning,fontWeight:700}}>{dateLabel}</span>}
+            {(actualTime>0||pomodorosDone>0)&&<span style={{fontSize:9,padding:"2px 8px",borderRadius:20,background:"#EEF2FF",color:"#374151",fontWeight:700}}>
+              ⏱ {pomodorosDone}/{pomodoroTarget} Pomodoros ({actualTime}min de {Number(task.estimatedTime||0)}min)
+            </span>}
             {task.steps&&task.steps.length>0&&<div style={{display:"flex",alignItems:"center",gap:3,marginLeft:"auto"}}>
               <div style={{width:40,height:4,background:UI.lineSoft,borderRadius:3,overflow:"hidden"}}><div style={{width:`${pct}%`,height:"100%",background:FAC(task.frente),borderRadius:3,transition:"width 0.3s"}}/></div>
               <span style={{fontSize:9,color:UI.muted,fontWeight:700}}>{pct}%</span>
@@ -1111,10 +1130,14 @@ export default function SERSystem() {
   const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
   const[lastSyncAt,setLastSyncAt]=useState(null);
   const[energyState,setEnergyState]=useState({checkins:[],lastEnergy:null,loading:false,error:null});
+  const[selectedPomodoroTaskId,setSelectedPomodoroTaskId]=useState("");
+  const[activePomodoroLogId,setActivePomodoroLogId]=useState(null);
+  const[timeLogBusy,setTimeLogBusy]=useState(false);
   const[viewportWidth,setViewportWidth]=useState(typeof window!=="undefined"?window.innerWidth:900);
   const syncHashRef=useRef(null);
   const streak=useMemo(()=>updateStreak(),[]);
   const pom=usePomodoro();
+  const prevPomRef=useRef({running:false,mode:"work"});
 
   useEffect(()=>{injectStyles();SoundEngine.init();},[]);
   useEffect(()=>{saveData(data);},[data]);
@@ -1126,6 +1149,28 @@ export default function SERSystem() {
     return()=>window.removeEventListener("resize",onResize);
   },[]);
   useEffect(()=>{loadEnergyToday();},[loadEnergyToday]);
+  useEffect(()=>{
+    const todayPending = (data.tasks || []).filter(t => t.date === today() && !t.completedAt);
+    if(todayPending.length===0){
+      if(selectedPomodoroTaskId) setSelectedPomodoroTaskId("");
+      return;
+    }
+    if(!selectedPomodoroTaskId || !todayPending.some(t => t.id === selectedPomodoroTaskId)){
+      setSelectedPomodoroTaskId(todayPending[0].id);
+    }
+  },[data.tasks,selectedPomodoroTaskId]);
+  useEffect(()=>{
+    const prev = prevPomRef.current;
+    const endedWorkSession = prev.running && !pom.running && prev.mode==="work" && pom.mode==="break";
+    if(endedWorkSession && activePomodoroLogId){
+      stopActivePomodoroSession(activePomodoroLogId,{silent:true}).then((ok)=>{
+        if(ok){
+          setToast({message:"Pomodoro concluído e tempo registrado."});
+        }
+      });
+    }
+    prevPomRef.current = {running:pom.running,mode:pom.mode};
+  },[pom.running,pom.mode,activePomodoroLogId,stopActivePomodoroSession]);
 
   const applyRemoteSnapshot = useCallback((remoteTasks = []) => {
     setData(prev => {
@@ -1203,6 +1248,100 @@ export default function SERSystem() {
       setEnergyState(prev => ({...prev,loading:false,error:/nao autorizado|não autorizado/i.test(message)?"Sem permissão para check-in.":"Não consegui salvar o check-in agora."}));
     }
   }, []);
+
+  const upsertTaskFromServer = useCallback((task) => {
+    if(!task?.id) return;
+    const clean = normalizeTaskShape(task, data.sops || DEFAULT_SOPS);
+    if(!clean) return;
+    setData(prev => {
+      const update = (list=[]) => {
+        const idx = list.findIndex(item => item.id === clean.id);
+        if(idx < 0) return list;
+        const next = [...list];
+        next[idx] = { ...next[idx], ...clean };
+        return next;
+      };
+      return {
+        ...prev,
+        tasks: sortTasksList(update(prev.tasks || [])),
+        history: sortHistoryList(update(prev.history || [])),
+      };
+    });
+  }, [data.sops]);
+
+  const stopActivePomodoroSession = useCallback(async (logId, options={}) => {
+    const cleanLogId = String(logId || "").trim();
+    if(!cleanLogId) return false;
+    setTimeLogBusy(true);
+    try{
+      const r = await apiFetch("/api/time/stop",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({logId:cleanLogId}),
+      });
+      if(!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>({}));
+      if(d?.task) upsertTaskFromServer(d.task);
+      setActivePomodoroLogId(null);
+      if(!options.silent){
+        setToast({message:`Tempo registrado: ${d?.log?.durationMinutes || 0} min.`});
+      }
+      return true;
+    }catch(err){
+      setToast({message:"Não consegui finalizar o timer agora."});
+      return false;
+    }finally{
+      setTimeLogBusy(false);
+    }
+  }, [upsertTaskFromServer]);
+
+  const handlePomodoroToggle = useCallback(async () => {
+    if(pom.running){
+      if(activePomodoroLogId){
+        await stopActivePomodoroSession(activePomodoroLogId,{silent:true});
+      }
+      pom.toggle();
+      return;
+    }
+
+    const taskId = String(selectedPomodoroTaskId || "").trim();
+    if(!taskId){
+      setToast({message:"Selecione uma tarefa para iniciar o Pomodoro."});
+      return;
+    }
+
+    const selectedTask = (data.tasks || []).find(t => t.id === taskId && !t.completedAt);
+    if(!selectedTask){
+      setToast({message:"Essa tarefa não está disponível para foco agora."});
+      return;
+    }
+
+    setTimeLogBusy(true);
+    try{
+      const r = await apiFetch("/api/time/start",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({taskId,type:"pomodoro"}),
+      });
+      if(!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>({}));
+      if(d?.log?.id){
+        setActivePomodoroLogId(d.log.id);
+      }
+      pom.toggle();
+    }catch(err){
+      setToast({message:"Não consegui iniciar o timer dessa tarefa."});
+    }finally{
+      setTimeLogBusy(false);
+    }
+  }, [pom,activePomodoroLogId,stopActivePomodoroSession,selectedPomodoroTaskId,data.tasks]);
+
+  const handlePomodoroReset = useCallback(async () => {
+    if(activePomodoroLogId){
+      await stopActivePomodoroSession(activePomodoroLogId,{silent:true});
+    }
+    pom.reset();
+  }, [activePomodoroLogId,stopActivePomodoroSession,pom]);
 
   useEffect(()=>{
     let active=true;
@@ -1375,7 +1514,16 @@ export default function SERSystem() {
           {/* Stats + Pomodoro side by side */}
           <div style={{display:"flex",gap:8,marginBottom:12}}>
             <StatsCompact tasks={[...data.tasks,...data.history]} dateStr={today()}/>
-            <PomodoroCompact pom={pom} totalEstimate={totalEstimate}/>
+            <PomodoroCompact
+              pom={pom}
+              totalEstimate={totalEstimate}
+              tasksToday={todayAll.filter(t=>!t.completedAt)}
+              selectedTaskId={selectedPomodoroTaskId}
+              onSelectTask={setSelectedPomodoroTaskId}
+              onTogglePomodoro={handlePomodoroToggle}
+              onResetPomodoro={handlePomodoroReset}
+              timeLogBusy={timeLogBusy}
+            />
           </div>
 
           <div style={{marginBottom:12}}><ActiveBlockIndicator/></div>

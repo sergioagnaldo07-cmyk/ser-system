@@ -108,6 +108,7 @@ const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY |
 const SUPABASE_TASKS_TABLE = String(process.env.SUPABASE_TASKS_TABLE || 'ser_tasks').trim();
 const SUPABASE_USAGE_TABLE = String(process.env.SUPABASE_USAGE_TABLE || 'ser_usage_events').trim();
 const SUPABASE_ENERGY_TABLE = String(process.env.SUPABASE_ENERGY_TABLE || 'ser_energy_checkins').trim();
+const SUPABASE_TIME_LOGS_TABLE = String(process.env.SUPABASE_TIME_LOGS_TABLE || 'ser_time_logs').trim();
 const SUPABASE_USAGE_MAX_ROWS = Number(process.env.SUPABASE_USAGE_MAX_ROWS || 12000);
 const RAW_DATA_DIR = String(process.env.SER_DATA_DIR || '').trim();
 const DATA_DIR = RAW_DATA_DIR
@@ -124,6 +125,7 @@ if (STORAGE_MODE === 'supabase' && (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)
 const AGENDA_FILE = path.join(DATA_DIR, 'agenda.json');
 const USAGE_FILE = path.join(DATA_DIR, 'usage-log.json');
 const ENERGY_FILE = path.join(DATA_DIR, 'energy-checkins.json');
+const TIME_LOGS_FILE = path.join(DATA_DIR, 'time-logs.json');
 const ALLOWED_FRENTES = new Set(['taka', 'haldan', 'pessoal']);
 const ENERGY_LEVELS = new Set(['alta', 'media', 'baixa']);
 const FRENTES = Object.freeze({
@@ -414,6 +416,12 @@ function normalizeTaskInput(task = {}, fallback = {}, options = {}) {
     createdAt,
     updatedAt,
     completedAt: completedAt || null,
+    actualTime: Number.isFinite(Number(task.actualTime ?? fallback.actualTime))
+      ? Math.max(0, Number(task.actualTime ?? fallback.actualTime))
+      : 0,
+    pomodorosCompleted: Number.isFinite(Number(task.pomodorosCompleted ?? fallback.pomodorosCompleted))
+      ? Math.max(0, Number(task.pomodorosCompleted ?? fallback.pomodorosCompleted))
+      : 0,
     followUpDaily,
     followUpTime,
     followUpClient,
@@ -1946,6 +1954,8 @@ function toSupabaseTaskRow(task = {}) {
     date: normalized.date,
     start_time: normalized.startTime || null,
     estimated_time: normalized.estimatedTime || 0,
+    actual_time: Number.isFinite(Number(normalized.actualTime)) ? Number(normalized.actualTime) : 0,
+    pomodoros_completed: Number.isFinite(Number(normalized.pomodorosCompleted)) ? Number(normalized.pomodorosCompleted) : 0,
     steps: Array.isArray(normalized.steps) ? normalized.steps : [],
     created_at: normalized.createdAt || nowISO(),
     updated_at: normalized.updatedAt || nowISO(),
@@ -1969,6 +1979,8 @@ function fromSupabaseTaskRow(row = {}) {
       date: normalizeDate(row.date || todayLocalISO()),
       startTime: normalizeDbTime(row.start_time),
       estimatedTime: Number.isFinite(Number(row.estimated_time)) ? Number(row.estimated_time) : 30,
+      actualTime: Number.isFinite(Number(row.actual_time)) ? Number(row.actual_time) : 0,
+      pomodorosCompleted: Number.isFinite(Number(row.pomodoros_completed)) ? Number(row.pomodoros_completed) : 0,
       steps: Array.isArray(row.steps) ? row.steps : [],
       createdAt: row.created_at || nowISO(),
       updatedAt: row.updated_at || row.created_at || nowISO(),
@@ -2075,6 +2087,34 @@ function fromSupabaseEnergyRow(row = {}) {
   };
 }
 
+function toSupabaseTimeLogRow(log = {}) {
+  return {
+    id: log.id || crypto.randomUUID(),
+    task_id: String(log.taskId || '').trim(),
+    date: normalizeDate(log.date || todayLocalISO()),
+    start_time: log.startTime || nowISO(),
+    end_time: log.endTime || null,
+    duration_minutes: Number.isFinite(Number(log.durationMinutes)) ? Number(log.durationMinutes) : null,
+    type: String(log.type || 'pomodoro').trim() || 'pomodoro',
+    completed: Boolean(log.completed),
+    created_at: log.createdAt || nowISO(),
+  };
+}
+
+function fromSupabaseTimeLogRow(row = {}) {
+  return {
+    id: row.id || crypto.randomUUID(),
+    taskId: String(row.task_id || '').trim(),
+    date: normalizeDate(row.date || todayLocalISO()),
+    startTime: row.start_time || null,
+    endTime: row.end_time || null,
+    durationMinutes: Number.isFinite(Number(row.duration_minutes)) ? Number(row.duration_minutes) : null,
+    type: String(row.type || 'pomodoro').trim() || 'pomodoro',
+    completed: Boolean(row.completed),
+    createdAt: row.created_at || nowISO(),
+  };
+}
+
 async function ensureSupabaseTables() {
   if (!isUsingSupabaseStorage() || supabaseTablesChecked) return;
 
@@ -2100,6 +2140,14 @@ async function ensureSupabaseTables() {
     .limit(1);
   if (energyError) {
     throw new Error(`Falha ao acessar tabela "${SUPABASE_ENERGY_TABLE}" no Supabase: ${energyError.message}`);
+  }
+
+  const { error: timeLogsError } = await supabase
+    .from(SUPABASE_TIME_LOGS_TABLE)
+    .select('id')
+    .limit(1);
+  if (timeLogsError) {
+    throw new Error(`Falha ao acessar tabela "${SUPABASE_TIME_LOGS_TABLE}" no Supabase: ${timeLogsError.message}`);
   }
 
   supabaseTablesChecked = true;
@@ -2432,6 +2480,129 @@ async function appendEnergyCheckin(checkin = {}) {
   } catch (err) {
     fallbackSupabaseToFile(err, 'appendEnergyCheckin');
     return appendEnergyCheckinFile(checkin);
+  }
+}
+
+async function ensureTimeLogsStorageFile() {
+  await fs.mkdir(path.dirname(TIME_LOGS_FILE), { recursive: true });
+  try {
+    await fs.access(TIME_LOGS_FILE);
+  } catch {
+    await fs.writeFile(
+      TIME_LOGS_FILE,
+      JSON.stringify({ updatedAt: nowISO(), logs: [] }, null, 2),
+      'utf8'
+    );
+  }
+}
+
+async function readTimeLogsDataFile() {
+  await ensureTimeLogsStorageFile();
+  try {
+    const raw = await fs.readFile(TIME_LOGS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const logs = Array.isArray(parsed.logs) ? parsed.logs : [];
+    return { updatedAt: parsed.updatedAt || null, logs };
+  } catch {
+    return { updatedAt: null, logs: [] };
+  }
+}
+
+async function writeTimeLogsDataFile(logs = []) {
+  await ensureTimeLogsStorageFile();
+  const normalized = (Array.isArray(logs) ? logs : [])
+    .map((log) => fromSupabaseTimeLogRow(toSupabaseTimeLogRow(log)))
+    .sort((a, b) => String(a.startTime || '').localeCompare(String(b.startTime || '')));
+  await fs.writeFile(
+    TIME_LOGS_FILE,
+    JSON.stringify({ updatedAt: nowISO(), logs: normalized }, null, 2),
+    'utf8'
+  );
+  return normalized;
+}
+
+async function ensureTimeLogsStorage() {
+  if (!isUsingSupabaseStorage()) {
+    await ensureTimeLogsStorageFile();
+    return;
+  }
+  try {
+    await ensureSupabaseTables();
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'time_logs');
+    await ensureTimeLogsStorageFile();
+  }
+}
+
+async function readTimeLogsData() {
+  if (!isUsingSupabaseStorage()) {
+    return readTimeLogsDataFile();
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const { data, error } = await supabase
+      .from(SUPABASE_TIME_LOGS_TABLE)
+      .select('*')
+      .order('start_time', { ascending: true })
+      .limit(5000);
+    if (error) throw new Error(error.message);
+    const logs = Array.isArray(data) ? data.map(fromSupabaseTimeLogRow) : [];
+    return { updatedAt: nowISO(), logs };
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'readTimeLogsData');
+    return readTimeLogsDataFile();
+  }
+}
+
+async function writeTimeLogsData(logs = []) {
+  if (!isUsingSupabaseStorage()) {
+    return writeTimeLogsDataFile(logs);
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const normalized = (Array.isArray(logs) ? logs : [])
+      .map((log) => fromSupabaseTimeLogRow(toSupabaseTimeLogRow(log)))
+      .sort((a, b) => String(a.startTime || '').localeCompare(String(b.startTime || '')));
+    const rows = normalized.map(toSupabaseTimeLogRow);
+
+    const { data: existingRows, error: existingError } = await supabase
+      .from(SUPABASE_TIME_LOGS_TABLE)
+      .select('id');
+    if (existingError) throw new Error(existingError.message);
+    const existingIds = new Set((existingRows || []).map((row) => String(row.id)));
+    const keepIds = new Set(rows.map((row) => String(row.id)));
+    const removeIds = [...existingIds].filter((id) => !keepIds.has(id));
+
+    if (rows.length > 0) {
+      const { error: upsertError } = await supabase
+        .from(SUPABASE_TIME_LOGS_TABLE)
+        .upsert(rows, { onConflict: 'id' });
+      if (upsertError) throw new Error(upsertError.message);
+    }
+    if (rows.length === 0 && existingIds.size > 0) {
+      const { error: deleteAllError } = await supabase
+        .from(SUPABASE_TIME_LOGS_TABLE)
+        .delete()
+        .neq('id', '__none__');
+      if (deleteAllError) throw new Error(deleteAllError.message);
+    } else if (removeIds.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < removeIds.length; i += chunkSize) {
+        const chunk = removeIds.slice(i, i + chunkSize);
+        const { error: deleteError } = await supabase
+          .from(SUPABASE_TIME_LOGS_TABLE)
+          .delete()
+          .in('id', chunk);
+        if (deleteError) throw new Error(deleteError.message);
+      }
+    }
+
+    return normalized;
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'writeTimeLogsData');
+    return writeTimeLogsDataFile(logs);
   }
 }
 
@@ -4298,6 +4469,7 @@ app.get('/api/health', (_req, res) => {
       tasksTable: SUPABASE_TASKS_TABLE,
       usageTable: SUPABASE_USAGE_TABLE,
       energyTable: SUPABASE_ENERGY_TABLE,
+      timeLogsTable: SUPABASE_TIME_LOGS_TABLE,
     },
     openai: {
       configured: Boolean(API_KEY),
@@ -4443,6 +4615,152 @@ app.get('/api/energy/today', requireReadAccess, async (_req, res) => {
   }
 });
 
+app.post('/api/time/start', requireReadAccess, async (req, res) => {
+  try {
+    const { taskId, type } = req.body || {};
+    const cleanTaskId = String(taskId || '').trim();
+    if (!cleanTaskId) return res.status(400).json({ error: 'taskId é obrigatório.' });
+
+    const agenda = await readAgendaData();
+    const task = agenda.tasks.find((item) => String(item.id) === cleanTaskId);
+    if (!task) return res.status(404).json({ error: 'Tarefa não encontrada.' });
+
+    const now = new Date();
+    const log = {
+      id: crypto.randomUUID(),
+      taskId: cleanTaskId,
+      date: todayLocalISO(),
+      startTime: now.toISOString(),
+      endTime: null,
+      durationMinutes: null,
+      type: String(type || 'pomodoro').trim() || 'pomodoro',
+      completed: false,
+      createdAt: now.toISOString(),
+    };
+
+    const logsData = await readTimeLogsData();
+    const logs = [...(logsData.logs || []), log];
+    await writeTimeLogsData(logs);
+    return res.json({ ok: true, log });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/time/stop', requireReadAccess, async (req, res) => {
+  try {
+    const { logId } = req.body || {};
+    const cleanLogId = String(logId || '').trim();
+    if (!cleanLogId) return res.status(400).json({ error: 'logId é obrigatório.' });
+
+    const logsData = await readTimeLogsData();
+    const idx = (logsData.logs || []).findIndex((item) => String(item.id) === cleanLogId);
+    if (idx < 0) return res.status(404).json({ error: 'Log de tempo não encontrado.' });
+
+    const target = logsData.logs[idx];
+    const startTs = new Date(target.startTime || nowISO()).getTime();
+    const end = new Date();
+    const durationMinutes = Math.max(1, Math.round((end.getTime() - startTs) / 60000));
+    const updatedLog = {
+      ...target,
+      endTime: end.toISOString(),
+      durationMinutes,
+      completed: true,
+    };
+    const nextLogs = [...logsData.logs];
+    nextLogs[idx] = updatedLog;
+    await writeTimeLogsData(nextLogs);
+
+    const agenda = await readAgendaData();
+    const taskIdx = agenda.tasks.findIndex((item) => String(item.id) === String(target.taskId || ''));
+    let updatedTask = null;
+    if (taskIdx >= 0) {
+      const baseTask = agenda.tasks[taskIdx];
+      updatedTask = normalizeTaskInput(
+        {
+          ...baseTask,
+          actualTime: Number(baseTask.actualTime || 0) + durationMinutes,
+          pomodorosCompleted: String(target.type || 'pomodoro').toLowerCase() === 'pomodoro'
+            ? Number(baseTask.pomodorosCompleted || 0) + 1
+            : Number(baseTask.pomodorosCompleted || 0),
+          source: 'api',
+        },
+        baseTask,
+        { touch: true }
+      );
+      const nextTasks = [...agenda.tasks];
+      nextTasks[taskIdx] = updatedTask;
+      await writeAgendaData(nextTasks);
+    }
+
+    return res.json({ ok: true, log: updatedLog, task: updatedTask });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/time/summary', requireReadAccess, async (req, res) => {
+  try {
+    const period = String(req.query?.period || 'today').trim();
+    const groupBy = String(req.query?.groupBy || 'task').trim();
+    const now = new Date();
+    const today = todayLocalISO();
+
+    let start = today;
+    if (period === 'week') {
+      const d = new Date(`${today}T12:00:00`);
+      const dow = d.getDay();
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - ((dow + 6) % 7));
+      start = todayLocalISO(monday);
+    } else if (period === 'month') {
+      start = `${today.slice(0, 7)}-01`;
+    }
+
+    const logsData = await readTimeLogsData();
+    const logs = (logsData.logs || []).filter((log) => {
+      if (!log?.completed) return false;
+      if (!log?.durationMinutes) return false;
+      const date = normalizeDate(log.date || today);
+      return date >= start && date <= today;
+    });
+
+    const agenda = await readAgendaData();
+    const taskMap = new Map((agenda.tasks || []).map((task) => [String(task.id), task]));
+    const aggregate = new Map();
+
+    for (const log of logs) {
+      const task = taskMap.get(String(log.taskId || ''));
+      let key = String(log.taskId || 'sem-tarefa');
+      let label = task?.title || 'Sem tarefa';
+      if (groupBy === 'frente') {
+        key = task?.frente || 'sem-frente';
+        label = FRENTES[key] || key;
+      } else if (groupBy === 'type') {
+        key = task?.type || 'Outro';
+        label = key;
+      }
+      const previous = aggregate.get(key) || { key, label, minutes: 0 };
+      previous.minutes += Number(log.durationMinutes || 0);
+      aggregate.set(key, previous);
+    }
+
+    const items = [...aggregate.values()].sort((a, b) => b.minutes - a.minutes);
+    const totalMinutes = items.reduce((sum, item) => sum + item.minutes, 0);
+
+    return res.json({
+      period,
+      groupBy,
+      start,
+      end: nowISO().slice(0, 10),
+      totalMinutes,
+      items,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP — Endpoints (whatsapp-web.js)
 // ═══════════════════════════════════════════════════════════════
@@ -4494,6 +4812,7 @@ app.post('/api/whatsapp/config', requireAdmin, (_req, res) => {
 await ensureAgendaStorage();
 await ensureUsageStorage();
 await ensureEnergyStorage();
+await ensureTimeLogsStorage();
 
 app.listen(PORT, () => {
   console.log('');

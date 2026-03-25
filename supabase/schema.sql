@@ -26,6 +26,8 @@ create index if not exists ser_tasks_date_idx on public.ser_tasks (date);
 create index if not exists ser_tasks_frente_idx on public.ser_tasks (frente);
 create index if not exists ser_tasks_completed_idx on public.ser_tasks (completed_at);
 create index if not exists ser_tasks_updated_idx on public.ser_tasks (updated_at desc);
+alter table public.ser_tasks add column if not exists actual_time integer not null default 0;
+alter table public.ser_tasks add column if not exists pomodoros_completed integer not null default 0;
 
 create table if not exists public.ser_usage_events (
   id text primary key,
@@ -60,6 +62,22 @@ create table if not exists public.ser_energy_checkins (
 
 create index if not exists ser_energy_checkins_date_idx on public.ser_energy_checkins (date desc);
 
+create table if not exists public.ser_time_logs (
+  id text primary key default gen_random_uuid()::text,
+  task_id text not null references public.ser_tasks(id) on delete cascade,
+  date text not null,
+  start_time timestamptz not null,
+  end_time timestamptz,
+  duration_minutes integer,
+  type text default 'pomodoro',
+  completed boolean default false,
+  created_at timestamptz default now()
+);
+
+create index if not exists ser_time_logs_task_idx on public.ser_time_logs (task_id);
+create index if not exists ser_time_logs_date_idx on public.ser_time_logs (date desc);
+
 alter table public.ser_tasks disable row level security;
 alter table public.ser_usage_events disable row level security;
 alter table public.ser_energy_checkins disable row level security;
+alter table public.ser_time_logs disable row level security;
