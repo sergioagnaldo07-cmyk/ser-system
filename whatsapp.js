@@ -47,6 +47,7 @@ let reminderTickRunning = false;
 let lastReminderDateKey = '';
 let lastEndOfDayReportDate = '';
 let lastWeeklyCostReportWeekKey = '';
+let lastGapSuggestionKey = '';
 const sentTaskReminderKeys = new Set();
 const whatsappAutoReconnect = process.env.WHATSAPP_AUTO_RECONNECT !== 'false';
 const whatsappReconnectBaseMs = Math.max(1000, Number(process.env.WHATSAPP_RECONNECT_BASE_MS || 5000));
@@ -453,6 +454,40 @@ async function buildMiddayCheckinMessage() {
   return ensureFollowUpStyle(lines.join('\n'));
 }
 
+function buildGapSuggestionFromTasks(tasks = [], dateISO = localDateISO()) {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const dayTasks = (Array.isArray(tasks) ? tasks : [])
+    .filter((task) => !task?.completedAt && task?.date === dateISO);
+
+  const fixed = dayTasks
+    .filter((task) => task?.startTime)
+    .sort((a, b) => String(a.startTime || '').localeCompare(String(b.startTime || '')));
+  const nextFixed = fixed.find((task) => {
+    const [h, m] = String(task.startTime || '00:00').split(':').map(Number);
+    return ((h * 60) + m) > currentMinutes;
+  }) || null;
+
+  let availableMinutes = 120;
+  if (nextFixed?.startTime) {
+    const [h, m] = String(nextFixed.startTime || '00:00').split(':').map(Number);
+    availableMinutes = Math.max(0, (h * 60 + m) - currentMinutes);
+  }
+  if (availableMinutes < 45) return null;
+
+  const flexible = dayTasks
+    .filter((task) => !task?.startTime)
+    .filter((task) => Number(task?.estimatedTime || 30) <= availableMinutes)
+    .sort((a, b) => Number(a?.estimatedTime || 30) - Number(b?.estimatedTime || 30));
+  if (flexible.length === 0) return null;
+
+  return {
+    task: flexible[0],
+    nextFixed,
+    availableMinutes,
+  };
+}
+
 async function runSmartRemindersTick() {
   if (reminderTickRunning) return;
   if (!remindersEnabled || !userPhoneNumber) return;
@@ -466,6 +501,7 @@ async function runSmartRemindersTick() {
     if (dateKey !== lastReminderDateKey) {
       sentTaskReminderKeys.clear();
       lastReminderDateKey = dateKey;
+      lastGapSuggestionKey = '';
     }
 
     if (typeof getAgendaTasksFn === 'function') {
@@ -537,6 +573,32 @@ async function runSmartRemindersTick() {
         console.log(
           `[WhatsApp] Follow-up diário enviado (${String(task.id || '').slice(0, 6)}): ${task.title}`
         );
+      }
+
+      if ((now.getMinutes() % 30) === 0) {
+        const gapSuggestion = buildGapSuggestionFromTasks(activeTasks, dateKey);
+        if (gapSuggestion?.task) {
+          const halfHourSlot = `${String(now.getHours()).padStart(2, '0')}:${now.getMinutes() >= 30 ? '30' : '00'}`;
+          const suggestionKey = `${dateKey}|${halfHourSlot}|${String(gapSuggestion.task.id || '')}`;
+          if (suggestionKey !== lastGapSuggestionKey) {
+            const nextFixedText = gapSuggestion.nextFixed?.startTime
+              ? `O próximo compromisso é só às ${gapSuggestion.nextFixed.startTime}.`
+              : 'Sem compromisso fixo nas próximas horas.';
+            const msg = ensureFollowUpStyle(
+              `${nextFixedText}\nO senhor tem ${gapSuggestion.availableMinutes} minutos livres.\nQue tal atacar "${gapSuggestion.task.title}" agora?`,
+              { question: 'Quer que eu ajuste o horário dessa tarefa para começar agora?' }
+            );
+            await sendMessage(userPhoneNumber, msg);
+            lastGapSuggestionKey = suggestionKey;
+            await notifyReminderSent({
+              kind: 'gap_suggestion',
+              dateKey,
+              phoneNumber: userPhoneNumber,
+              task: gapSuggestion.task,
+            });
+            console.log(`[WhatsApp] Sugestão de janela livre enviada (${String(gapSuggestion.task.id || '').slice(0, 6)}).`);
+          }
+        }
       }
     }
 

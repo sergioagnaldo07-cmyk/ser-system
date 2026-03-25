@@ -5237,6 +5237,72 @@ app.get('/api/time/summary', requireReadAccess, async (req, res) => {
   }
 });
 
+app.get('/api/suggest/next', requireReadAccess, async (_req, res) => {
+  try {
+    const agenda = await readAgendaData();
+    const today = todayLocalISO();
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const typePriority = new Map([
+      ['Reunião', 100],
+      ['Follow-up', 90],
+      ['Proposta', 80],
+      ['SEO', 70],
+      ['Conteúdo', 60],
+      ['WordPress', 50],
+      ['Gestão equipe', 45],
+      ['Outro', 30],
+      ['Casa', 25],
+      ['Alimentação', 20],
+      ['Esporte', 15],
+    ]);
+
+    const dayTasks = sortAgendaTasks(
+      (agenda.tasks || []).filter((task) => !task.completedAt && task.date === today)
+    );
+    const nextFixed = dayTasks.find((task) => {
+      if (!task.startTime) return false;
+      const [h, m] = String(task.startTime || '00:00').split(':').map(Number);
+      return ((h * 60) + m) > currentMinutes;
+    }) || null;
+
+    let availableMinutes = 120;
+    if (nextFixed?.startTime) {
+      const [h, m] = String(nextFixed.startTime).split(':').map(Number);
+      availableMinutes = Math.max(0, (h * 60 + m) - currentMinutes);
+    }
+
+    const pendingByFrente = { taka: 0, haldan: 0, pessoal: 0 };
+    dayTasks.forEach((task) => {
+      if (pendingByFrente[task.frente] !== undefined) pendingByFrente[task.frente] += 1;
+    });
+
+    const flexible = dayTasks
+      .filter((task) => !task.startTime)
+      .filter((task) => (task.estimatedTime || 30) <= availableMinutes)
+      .map((task) => {
+        const basePriority = typePriority.get(task.type) || 10;
+        const frentePressure = pendingByFrente[task.frente] || 0;
+        const quickWin = Math.max(0, 40 - Number(task.estimatedTime || 30));
+        const score = basePriority + frentePressure + quickWin;
+        return { ...task, _score: score };
+      })
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 3)
+      .map(({ _score, ...task }) => task);
+
+    return res.json({
+      availableMinutes,
+      nextFixed: nextFixed
+        ? { id: nextFixed.id, title: nextFixed.title, startTime: nextFixed.startTime }
+        : null,
+      suggestions: flexible,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/gamification/status', requireReadAccess, async (_req, res) => {
   try {
     const state = await readGamificationState();
