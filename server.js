@@ -4140,11 +4140,89 @@ async function buildEndOfDayReportMessage() {
   return ensureWhatsAppResponseStyle(lines.join('\n'), { appendQuestion: false });
 }
 
+function getMondayISO(dateISO = todayLocalISO()) {
+  const d = new Date(`${normalizeDate(dateISO)}T12:00:00`);
+  const dow = d.getDay();
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - ((dow + 6) % 7));
+  return todayLocalISO(monday);
+}
+
+function computeWeeklyProductivityMetrics(tasks = [], weekStart = todayLocalISO(), weekEnd = todayLocalISO()) {
+  const weekTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => task.date >= weekStart && task.date <= weekEnd);
+  const completed = weekTasks.filter((task) => Boolean(task.completedAt));
+  const pending = weekTasks.filter((task) => !task.completedAt);
+  const timeByFrente = { taka: 0, haldan: 0, pessoal: 0 };
+
+  completed.forEach((task) => {
+    const frente = String(task.frente || '');
+    if (timeByFrente[frente] === undefined) return;
+    const minutes = Number(task.actualTime || task.estimatedTime || 30);
+    timeByFrente[frente] += Number.isFinite(minutes) ? minutes : 0;
+  });
+
+  return { weekTasks, completed, pending, timeByFrente };
+}
+
+async function buildWeeklyReviewPayload(options = {}) {
+  const withNarrative = options.withNarrative !== false;
+  const today = todayLocalISO();
+  const weekStart = getMondayISO(today);
+  const agenda = await readAgendaData();
+  const metrics = computeWeeklyProductivityMetrics(agenda.tasks || [], weekStart, today);
+  let narrative = '';
+
+  if (withNarrative) {
+    const prompt = `Gere um resumo semanal de produtividade em 5-8 linhas para o senhor Sergio.
+Dados: ${metrics.completed.length} concluídas, ${metrics.pending.length} pendentes.
+Tempo por frente: Taka ${(metrics.timeByFrente.taka / 60).toFixed(1)}h, Haldan ${(metrics.timeByFrente.haldan / 60).toFixed(1)}h, Pessoal ${(metrics.timeByFrente.pessoal / 60).toFixed(1)}h.
+Tom: coach incentivador, direto e profissional. Destaque pontos fortes e sugira 1 ajuste.`;
+    try {
+      narrative = await callOpenAI(
+        SER_COACH_PROMPT,
+        [{ role: 'user', content: prompt }],
+        320,
+        {
+          model: CHAT_MODEL,
+          usageKind: 'weekly_review',
+          cache: false,
+          temperature: 0.2,
+        }
+      );
+    } catch (err) {
+      narrative = `Resumo da semana: ${metrics.completed.length} concluídas e ${metrics.pending.length} pendentes.`;
+      console.error('[Weekly Review] Falha ao gerar narrativa:', err.message);
+    }
+  }
+
+  return {
+    weekStart,
+    weekEnd: today,
+    completed: metrics.completed.length,
+    pending: metrics.pending.length,
+    timeByFrente: metrics.timeByFrente,
+    narrative: String(narrative || '').trim(),
+  };
+}
+
 async function buildWeeklyCostReportMessage() {
   const summary = await getUsageSummary('last_7_days');
-  return buildUsageSummaryMessage(summary, {
+  const weekly = await buildWeeklyReviewPayload({ withNarrative: true });
+  const costText = buildUsageSummaryMessage(summary, {
     prioritizeWhatsApp: true,
-    ask: true,
+    ask: false,
+  });
+  const lines = [
+    `📊 Semana (${weekly.weekStart} a ${weekly.weekEnd})`,
+    `Concluídas: ${weekly.completed} | Pendentes: ${weekly.pending}`,
+    `Taka: ${(weekly.timeByFrente.taka / 60).toFixed(1)}h | Haldan: ${(weekly.timeByFrente.haldan / 60).toFixed(1)}h | Pessoal: ${(weekly.timeByFrente.pessoal / 60).toFixed(1)}h`,
+    '',
+    weekly.narrative || 'Seguimos firmes, senhor. Boa evolução nesta semana.',
+    '',
+    costText,
+  ];
+  return ensureWhatsAppResponseStyle(lines.join('\n'), {
+    question: 'Quer que eu já monte um plano de foco para a próxima semana, senhor?',
   });
 }
 
@@ -5298,6 +5376,15 @@ app.get('/api/suggest/next', requireReadAccess, async (_req, res) => {
         : null,
       suggestions: flexible,
     });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/review/weekly', requireReadAccess, async (_req, res) => {
+  try {
+    const payload = await buildWeeklyReviewPayload({ withNarrative: true });
+    return res.json(payload);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
