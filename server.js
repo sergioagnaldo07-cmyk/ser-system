@@ -109,6 +109,8 @@ const SUPABASE_TASKS_TABLE = String(process.env.SUPABASE_TASKS_TABLE || 'ser_tas
 const SUPABASE_USAGE_TABLE = String(process.env.SUPABASE_USAGE_TABLE || 'ser_usage_events').trim();
 const SUPABASE_ENERGY_TABLE = String(process.env.SUPABASE_ENERGY_TABLE || 'ser_energy_checkins').trim();
 const SUPABASE_TIME_LOGS_TABLE = String(process.env.SUPABASE_TIME_LOGS_TABLE || 'ser_time_logs').trim();
+const SUPABASE_GAMIFICATION_TABLE = String(process.env.SUPABASE_GAMIFICATION_TABLE || 'ser_gamification').trim();
+const SUPABASE_XP_EVENTS_TABLE = String(process.env.SUPABASE_XP_EVENTS_TABLE || 'ser_xp_events').trim();
 const SUPABASE_USAGE_MAX_ROWS = Number(process.env.SUPABASE_USAGE_MAX_ROWS || 12000);
 const RAW_DATA_DIR = String(process.env.SER_DATA_DIR || '').trim();
 const DATA_DIR = RAW_DATA_DIR
@@ -126,6 +128,7 @@ const AGENDA_FILE = path.join(DATA_DIR, 'agenda.json');
 const USAGE_FILE = path.join(DATA_DIR, 'usage-log.json');
 const ENERGY_FILE = path.join(DATA_DIR, 'energy-checkins.json');
 const TIME_LOGS_FILE = path.join(DATA_DIR, 'time-logs.json');
+const GAMIFICATION_FILE = path.join(DATA_DIR, 'gamification.json');
 const ALLOWED_FRENTES = new Set(['taka', 'haldan', 'pessoal']);
 const ENERGY_LEVELS = new Set(['alta', 'media', 'baixa']);
 const FRENTES = Object.freeze({
@@ -147,6 +150,36 @@ const ACTION_REACTIONS = Object.freeze({
   append_step: '🧩',
   default: '👍',
 });
+const XP_RULES = Object.freeze({
+  task_complete: 10,
+  task_complete_hard: 25,
+  task_complete_ontime: 15,
+  pomodoro_complete: 5,
+  streak_day: 20,
+  streak_7: 100,
+  streak_30: 500,
+  energy_checkin: 3,
+  daily_plan_complete: 15,
+  morning_start: 5,
+});
+const LEVELS = Object.freeze([
+  { level: 1, xpRequired: 0, title: 'Iniciante' },
+  { level: 2, xpRequired: 100, title: 'Aprendiz' },
+  { level: 3, xpRequired: 300, title: 'Focado' },
+  { level: 4, xpRequired: 600, title: 'Produtivo' },
+  { level: 5, xpRequired: 1000, title: 'Consistente' },
+  { level: 6, xpRequired: 1500, title: 'Disciplinado' },
+  { level: 7, xpRequired: 2500, title: 'Expert' },
+  { level: 8, xpRequired: 4000, title: 'Mestre SER' },
+  { level: 9, xpRequired: 6000, title: 'Lenda' },
+  { level: 10, xpRequired: 10000, title: 'Transcendente' },
+]);
+const BADGES = Object.freeze([
+  { id: 'first_task', name: 'Primeira Tarefa' },
+  { id: 'streak_7', name: 'Semana Firme' },
+  { id: 'streak_30', name: 'Mês de Ouro' },
+  { id: 'pomodoro_100', name: 'Centurião' },
+]);
 const SELECTOR_STOPWORDS = new Set([
   'a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas',
   'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
@@ -296,6 +329,56 @@ function addDaysISO(dateStr, days) {
   const d = new Date(`${dateStr}T12:00:00`);
   d.setDate(d.getDate() + days);
   return sharedTodayLocalISO(d);
+}
+
+function getLevelFromXp(xp = 0) {
+  const safeXp = Math.max(0, Number(xp || 0));
+  let current = LEVELS[0];
+  for (const item of LEVELS) {
+    if (safeXp >= item.xpRequired) current = item;
+  }
+  return current;
+}
+
+function defaultGamificationProfile() {
+  const levelInfo = getLevelFromXp(0);
+  return {
+    id: 'sergio',
+    xp: 0,
+    level: levelInfo.level,
+    levelTitle: levelInfo.title,
+    currentStreak: 0,
+    bestStreak: 0,
+    lastActiveDate: null,
+    streakFreezesRemaining: 1,
+    badges: [],
+    updatedAt: nowISO(),
+  };
+}
+
+function normalizeGamificationProfile(profile = {}) {
+  const fallback = defaultGamificationProfile();
+  const xp = Math.max(0, Number(profile.xp ?? fallback.xp));
+  const levelInfo = getLevelFromXp(xp);
+  const currentStreak = Math.max(0, Number(profile.currentStreak ?? profile.current_streak ?? fallback.currentStreak));
+  const bestStreak = Math.max(currentStreak, Number(profile.bestStreak ?? profile.best_streak ?? fallback.bestStreak));
+  const badges = Array.isArray(profile.badges) ? profile.badges : [];
+
+  return {
+    id: String(profile.id || fallback.id),
+    xp,
+    level: levelInfo.level,
+    levelTitle: levelInfo.title,
+    currentStreak,
+    bestStreak,
+    lastActiveDate: profile.lastActiveDate || profile.last_active_date || fallback.lastActiveDate,
+    streakFreezesRemaining: Math.max(
+      0,
+      Number(profile.streakFreezesRemaining ?? profile.streak_freezes_remaining ?? fallback.streakFreezesRemaining)
+    ),
+    badges,
+    updatedAt: profile.updatedAt || profile.updated_at || nowISO(),
+  };
 }
 
 function normalizeText(value = '') {
@@ -457,6 +540,15 @@ function mergeTaskLists(localTasks = [], remoteTasks = []) {
   }
 
   return sortAgendaTasks([...map.values()]);
+}
+
+function detectNewlyCompletedTasks(beforeTasks = [], afterTasks = []) {
+  const beforeMap = new Map((beforeTasks || []).map((task) => [String(task.id), task]));
+  return (afterTasks || []).filter((task) => {
+    const previous = beforeMap.get(String(task.id));
+    if (!previous) return false;
+    return !previous.completedAt && Boolean(task.completedAt);
+  });
 }
 
 function formatTaskLine(task) {
@@ -2150,6 +2242,22 @@ async function ensureSupabaseTables() {
     throw new Error(`Falha ao acessar tabela "${SUPABASE_TIME_LOGS_TABLE}" no Supabase: ${timeLogsError.message}`);
   }
 
+  const { error: gamificationError } = await supabase
+    .from(SUPABASE_GAMIFICATION_TABLE)
+    .select('id')
+    .limit(1);
+  if (gamificationError) {
+    throw new Error(`Falha ao acessar tabela "${SUPABASE_GAMIFICATION_TABLE}" no Supabase: ${gamificationError.message}`);
+  }
+
+  const { error: xpEventsError } = await supabase
+    .from(SUPABASE_XP_EVENTS_TABLE)
+    .select('id')
+    .limit(1);
+  if (xpEventsError) {
+    throw new Error(`Falha ao acessar tabela "${SUPABASE_XP_EVENTS_TABLE}" no Supabase: ${xpEventsError.message}`);
+  }
+
   supabaseTablesChecked = true;
 }
 
@@ -2604,6 +2712,345 @@ async function writeTimeLogsData(logs = []) {
     fallbackSupabaseToFile(err, 'writeTimeLogsData');
     return writeTimeLogsDataFile(logs);
   }
+}
+
+function toSupabaseGamificationRow(profile = {}) {
+  const normalized = normalizeGamificationProfile(profile);
+  return {
+    id: normalized.id,
+    xp: normalized.xp,
+    level: normalized.level,
+    current_streak: normalized.currentStreak,
+    best_streak: normalized.bestStreak,
+    last_active_date: normalized.lastActiveDate || null,
+    streak_freezes_remaining: normalized.streakFreezesRemaining,
+    badges: Array.isArray(normalized.badges) ? normalized.badges : [],
+    updated_at: normalized.updatedAt || nowISO(),
+  };
+}
+
+function fromSupabaseGamificationRow(row = {}) {
+  return normalizeGamificationProfile({
+    id: row.id,
+    xp: row.xp,
+    level: row.level,
+    currentStreak: row.current_streak,
+    bestStreak: row.best_streak,
+    lastActiveDate: row.last_active_date,
+    streakFreezesRemaining: row.streak_freezes_remaining,
+    badges: Array.isArray(row.badges) ? row.badges : [],
+    updatedAt: row.updated_at,
+  });
+}
+
+function toSupabaseXpEventRow(event = {}) {
+  return {
+    id: event.id || crypto.randomUUID(),
+    event_type: String(event.eventType || '').trim(),
+    xp_amount: Number(event.xpAmount || 0),
+    description: event.description ? String(event.description).trim() : null,
+    metadata: event.metadata && typeof event.metadata === 'object' ? event.metadata : null,
+    created_at: event.createdAt || nowISO(),
+  };
+}
+
+function fromSupabaseXpEventRow(row = {}) {
+  return {
+    id: row.id || crypto.randomUUID(),
+    eventType: row.event_type || null,
+    xpAmount: Number(row.xp_amount || 0),
+    description: row.description || null,
+    metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : null,
+    createdAt: row.created_at || nowISO(),
+  };
+}
+
+async function ensureGamificationStorageFile() {
+  await fs.mkdir(path.dirname(GAMIFICATION_FILE), { recursive: true });
+  try {
+    await fs.access(GAMIFICATION_FILE);
+  } catch {
+    await fs.writeFile(
+      GAMIFICATION_FILE,
+      JSON.stringify({ updatedAt: nowISO(), profile: defaultGamificationProfile(), events: [] }, null, 2),
+      'utf8'
+    );
+  }
+}
+
+async function readGamificationDataFile() {
+  await ensureGamificationStorageFile();
+  try {
+    const raw = await fs.readFile(GAMIFICATION_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const profile = normalizeGamificationProfile(parsed.profile || {});
+    const events = Array.isArray(parsed.events) ? parsed.events : [];
+    return { updatedAt: parsed.updatedAt || null, profile, events };
+  } catch {
+    return { updatedAt: null, profile: defaultGamificationProfile(), events: [] };
+  }
+}
+
+async function writeGamificationDataFile(profile = {}, events = []) {
+  await ensureGamificationStorageFile();
+  const safeProfile = normalizeGamificationProfile(profile);
+  const safeEvents = (Array.isArray(events) ? events : [])
+    .map((event) => fromSupabaseXpEventRow(toSupabaseXpEventRow(event)))
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+    .slice(-10000);
+  await fs.writeFile(
+    GAMIFICATION_FILE,
+    JSON.stringify({ updatedAt: nowISO(), profile: safeProfile, events: safeEvents }, null, 2),
+    'utf8'
+  );
+  return { profile: safeProfile, events: safeEvents };
+}
+
+async function ensureGamificationStorage() {
+  if (!isUsingSupabaseStorage()) {
+    await ensureGamificationStorageFile();
+    return;
+  }
+  try {
+    await ensureSupabaseTables();
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'gamification');
+    await ensureGamificationStorageFile();
+  }
+}
+
+async function readGamificationState() {
+  if (!isUsingSupabaseStorage()) {
+    return readGamificationDataFile();
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const { data: profileRow, error: profileError } = await supabase
+      .from(SUPABASE_GAMIFICATION_TABLE)
+      .select('*')
+      .eq('id', 'sergio')
+      .maybeSingle();
+    if (profileError) throw new Error(profileError.message);
+
+    const { data: eventRows, error: eventsError } = await supabase
+      .from(SUPABASE_XP_EVENTS_TABLE)
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(10000);
+    if (eventsError) throw new Error(eventsError.message);
+
+    const profile = profileRow ? fromSupabaseGamificationRow(profileRow) : defaultGamificationProfile();
+    const events = Array.isArray(eventRows) ? eventRows.map(fromSupabaseXpEventRow) : [];
+    return { updatedAt: nowISO(), profile, events };
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'readGamificationState');
+    return readGamificationDataFile();
+  }
+}
+
+async function writeGamificationState(profile = {}, events = []) {
+  if (!isUsingSupabaseStorage()) {
+    return writeGamificationDataFile(profile, events);
+  }
+
+  try {
+    await ensureSupabaseTables();
+    const safeProfile = normalizeGamificationProfile(profile);
+    const safeEvents = (Array.isArray(events) ? events : [])
+      .map((event) => fromSupabaseXpEventRow(toSupabaseXpEventRow(event)))
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+      .slice(-10000);
+
+    const { error: upsertProfileError } = await supabase
+      .from(SUPABASE_GAMIFICATION_TABLE)
+      .upsert(toSupabaseGamificationRow(safeProfile), { onConflict: 'id' });
+    if (upsertProfileError) throw new Error(upsertProfileError.message);
+
+    const rows = safeEvents.map(toSupabaseXpEventRow);
+    const { data: existingRows, error: existingError } = await supabase
+      .from(SUPABASE_XP_EVENTS_TABLE)
+      .select('id');
+    if (existingError) throw new Error(existingError.message);
+    const existingIds = new Set((existingRows || []).map((row) => String(row.id)));
+    const keepIds = new Set(rows.map((row) => String(row.id)));
+    const removeIds = [...existingIds].filter((id) => !keepIds.has(id));
+
+    if (rows.length > 0) {
+      const { error: upsertEventsError } = await supabase
+        .from(SUPABASE_XP_EVENTS_TABLE)
+        .upsert(rows, { onConflict: 'id' });
+      if (upsertEventsError) throw new Error(upsertEventsError.message);
+    }
+    if (rows.length === 0 && existingIds.size > 0) {
+      const { error: deleteAllError } = await supabase
+        .from(SUPABASE_XP_EVENTS_TABLE)
+        .delete()
+        .neq('id', '__none__');
+      if (deleteAllError) throw new Error(deleteAllError.message);
+    } else if (removeIds.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < removeIds.length; i += chunkSize) {
+        const chunk = removeIds.slice(i, i + chunkSize);
+        const { error: deleteError } = await supabase
+          .from(SUPABASE_XP_EVENTS_TABLE)
+          .delete()
+          .in('id', chunk);
+        if (deleteError) throw new Error(deleteError.message);
+      }
+    }
+
+    return { profile: safeProfile, events: safeEvents };
+  } catch (err) {
+    fallbackSupabaseToFile(err, 'writeGamificationState');
+    return writeGamificationDataFile(profile, events);
+  }
+}
+
+function hasUnlockedBadge(profile = {}, badgeId = '') {
+  const badges = Array.isArray(profile.badges) ? profile.badges : [];
+  return badges.some((badge) => String(badge.id) === String(badgeId));
+}
+
+function applyActivityStreak(profile = {}, activityDate = todayLocalISO()) {
+  const safe = normalizeGamificationProfile(profile);
+  const currentDate = normalizeDate(activityDate);
+  if (!safe.lastActiveDate) {
+    safe.currentStreak = 1;
+    safe.bestStreak = Math.max(safe.bestStreak, safe.currentStreak);
+    safe.lastActiveDate = currentDate;
+    return safe;
+  }
+  if (safe.lastActiveDate === currentDate) {
+    return safe;
+  }
+  const yesterday = addDaysISO(currentDate, -1);
+  if (safe.lastActiveDate === yesterday) {
+    safe.currentStreak += 1;
+  } else {
+    safe.currentStreak = 1;
+  }
+  safe.bestStreak = Math.max(safe.bestStreak, safe.currentStreak);
+  safe.lastActiveDate = currentDate;
+  return safe;
+}
+
+function collectNewGamificationBadges(profile = {}, events = []) {
+  const unlocked = [];
+  const safeProfile = normalizeGamificationProfile(profile);
+  const safeEvents = Array.isArray(events) ? events : [];
+  const taskCompletions = safeEvents.filter((event) => event.eventType === 'task_complete').length;
+  const pomodoros = safeEvents.filter((event) => event.eventType === 'pomodoro_complete').length;
+
+  if (!hasUnlockedBadge(safeProfile, 'first_task') && taskCompletions >= 1) {
+    unlocked.push(BADGES.find((badge) => badge.id === 'first_task'));
+  }
+  if (!hasUnlockedBadge(safeProfile, 'streak_7') && safeProfile.currentStreak >= 7) {
+    unlocked.push(BADGES.find((badge) => badge.id === 'streak_7'));
+  }
+  if (!hasUnlockedBadge(safeProfile, 'streak_30') && safeProfile.currentStreak >= 30) {
+    unlocked.push(BADGES.find((badge) => badge.id === 'streak_30'));
+  }
+  if (!hasUnlockedBadge(safeProfile, 'pomodoro_100') && pomodoros >= 100) {
+    unlocked.push(BADGES.find((badge) => badge.id === 'pomodoro_100'));
+  }
+
+  return unlocked.filter(Boolean);
+}
+
+async function awardXp(eventType = '', description = '', options = {}) {
+  const type = String(eventType || '').trim();
+  const base = Number(XP_RULES[type] || 0);
+  const amount = Number.isFinite(Number(options.amount)) ? Number(options.amount) : base;
+  if (!type || amount <= 0) return null;
+
+  const state = await readGamificationState();
+  const profile = normalizeGamificationProfile(state.profile || {});
+  const events = Array.isArray(state.events) ? [...state.events] : [];
+  const dedupeKey = String(options?.metadata?.dedupeKey || '').trim();
+  if (dedupeKey) {
+    const alreadyExists = events.some((event) => String(event?.metadata?.dedupeKey || '') === dedupeKey);
+    if (alreadyExists) return { profile, events, skipped: true };
+  }
+
+  const now = nowISO();
+  const event = {
+    id: crypto.randomUUID(),
+    eventType: type,
+    xpAmount: amount,
+    description: description ? String(description).trim() : null,
+    metadata: options.metadata && typeof options.metadata === 'object' ? options.metadata : null,
+    createdAt: now,
+  };
+  events.push(event);
+
+  const previousLevel = profile.level;
+  profile.xp += amount;
+  const streaked = applyActivityStreak(profile, options.activityDate || todayLocalISO());
+  profile.currentStreak = streaked.currentStreak;
+  profile.bestStreak = streaked.bestStreak;
+  profile.lastActiveDate = streaked.lastActiveDate;
+  const nextLevel = getLevelFromXp(profile.xp);
+  profile.level = nextLevel.level;
+  profile.levelTitle = nextLevel.title;
+  profile.updatedAt = now;
+
+  const unlocked = collectNewGamificationBadges(profile, events);
+  if (unlocked.length > 0) {
+    const existing = Array.isArray(profile.badges) ? profile.badges : [];
+    const nextBadges = [...existing];
+    unlocked.forEach((badge) => {
+      nextBadges.push({
+        id: badge.id,
+        name: badge.name,
+        unlockedAt: now,
+      });
+    });
+    profile.badges = nextBadges;
+  }
+
+  await writeGamificationState(profile, events);
+  return {
+    profile,
+    event,
+    leveledUp: profile.level > previousLevel,
+    newBadges: unlocked,
+  };
+}
+
+async function awardXpForTaskCompletion(task = {}, origin = 'agenda') {
+  const taskId = String(task?.id || '').trim();
+  if (!taskId) return null;
+  const completedAt = task.completedAt || nowISO();
+  const completedDate = normalizeDate(String(completedAt).slice(0, 10));
+  const dedupeKey = `task_complete:${taskId}:${completedDate}`;
+
+  let amount = XP_RULES.task_complete;
+  if (Number(task?.estimatedTime || 0) > 60) {
+    amount = XP_RULES.task_complete_hard;
+  }
+
+  if (task?.date && task?.startTime && String(completedAt).length >= 16) {
+    const due = new Date(`${task.date}T${task.startTime}:00`).getTime();
+    const done = new Date(completedAt).getTime();
+    if (!Number.isNaN(due) && !Number.isNaN(done) && done <= due) {
+      amount = Math.max(amount, XP_RULES.task_complete_ontime);
+    }
+  }
+
+  return awardXp(
+    'task_complete',
+    `Tarefa concluída: ${task.title || 'sem título'}`,
+    {
+      amount,
+      activityDate: task?.date || completedDate,
+      metadata: {
+        dedupeKey,
+        taskId,
+        origin,
+      },
+    }
+  );
 }
 
 function getModelTokenPrices(model = '') {
@@ -3523,6 +3970,7 @@ async function executeWhatsAppActions({ actions = [], tasks = [], commit = false
         );
         hasMutation = true;
         changes.push(`🏁 Marquei como concluída: (${String(target.id).slice(0, 6)}) ${target.title}.`);
+        await awardXpForTaskCompletion(workingTasks[idx], 'whatsapp');
       }
       continue;
     }
@@ -3661,6 +4109,7 @@ async function completeTaskById(taskId = '') {
   const next = [...agenda.tasks];
   next[idx] = completed;
   await writeAgendaData(next);
+  await awardXpForTaskCompletion(completed, 'whatsapp_followup');
   return completed;
 }
 
@@ -4056,6 +4505,10 @@ async function processWhatsAppMessage({ text, sourceType = 'text', senderNumber 
       note: trimTextForModel(userText, 180),
       source: 'whatsapp',
       createdAt: now.toISOString(),
+    });
+    await awardXp('energy_checkin', 'Check-in de energia pelo WhatsApp', {
+      activityDate: saved.date,
+      metadata: { dedupeKey: `energy:${saved.id}`, source: 'whatsapp' },
     });
 
     if (saved.energyLevel === 'baixa') {
@@ -4470,6 +4923,8 @@ app.get('/api/health', (_req, res) => {
       usageTable: SUPABASE_USAGE_TABLE,
       energyTable: SUPABASE_ENERGY_TABLE,
       timeLogsTable: SUPABASE_TIME_LOGS_TABLE,
+      gamificationTable: SUPABASE_GAMIFICATION_TABLE,
+      xpEventsTable: SUPABASE_XP_EVENTS_TABLE,
     },
     openai: {
       configured: Boolean(API_KEY),
@@ -4517,6 +4972,10 @@ app.post('/api/agenda/sync', requireAdmin, async (req, res) => {
     const agenda = await readAgendaData();
     const merged = mergeTaskLists(agenda.tasks, normalizedIncoming);
     await writeAgendaData(merged);
+    const justCompleted = detectNewlyCompletedTasks(agenda.tasks, merged);
+    for (const task of justCompleted) {
+      await awardXpForTaskCompletion(task, 'agenda_sync');
+    }
     res.json({ ok: true, count: merged.length, tasks: merged });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4562,6 +5021,9 @@ app.put('/api/agenda/tasks/:id', requireAdmin, async (req, res) => {
     const next = [...agenda.tasks];
     next[idx] = updated;
     await writeAgendaData(next);
+    if (!agenda.tasks[idx].completedAt && updated.completedAt) {
+      await awardXpForTaskCompletion(updated, 'agenda_put');
+    }
     return res.json({ ok: true, task: updated });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -4594,6 +5056,10 @@ app.post('/api/energy/checkin', requireReadAccess, async (req, res) => {
       note: note ? trimTextForModel(String(note), 240) : null,
       source: source ? String(source).trim() : 'app',
       createdAt: now.toISOString(),
+    });
+    await awardXp('energy_checkin', 'Check-in de energia pelo app', {
+      activityDate: checkin.date,
+      metadata: { dedupeKey: `energy:${checkin.id}`, source: checkin.source || 'app' },
     });
     return res.json({ ok: true, checkin });
   } catch (err) {
@@ -4693,6 +5159,16 @@ app.post('/api/time/stop', requireReadAccess, async (req, res) => {
       await writeAgendaData(nextTasks);
     }
 
+    if (String(updatedLog.type || '').toLowerCase() === 'pomodoro') {
+      await awardXp('pomodoro_complete', 'Pomodoro concluído', {
+        activityDate: updatedLog.date,
+        metadata: {
+          dedupeKey: `pomodoro:${updatedLog.id}`,
+          taskId: updatedLog.taskId,
+        },
+      });
+    }
+
     return res.json({ ok: true, log: updatedLog, task: updatedTask });
   } catch (err) {
     return res.status(500).json({ error: err.message });
@@ -4761,6 +5237,43 @@ app.get('/api/time/summary', requireReadAccess, async (req, res) => {
   }
 });
 
+app.get('/api/gamification/status', requireReadAccess, async (_req, res) => {
+  try {
+    const state = await readGamificationState();
+    const profile = normalizeGamificationProfile(state.profile || {});
+    const events = Array.isArray(state.events) ? state.events : [];
+    const currentLevel = getLevelFromXp(profile.xp);
+    const nextLevel = LEVELS.find((item) => item.level === (currentLevel.level + 1)) || null;
+    const currentLevelRequired = currentLevel.xpRequired || 0;
+    const nextRequired = nextLevel ? nextLevel.xpRequired : currentLevelRequired;
+    const span = Math.max(1, nextRequired - currentLevelRequired);
+    const progressPercent = nextLevel
+      ? Math.max(0, Math.min(100, ((profile.xp - currentLevelRequired) / span) * 100))
+      : 100;
+    const latestBadge = Array.isArray(profile.badges) && profile.badges.length > 0
+      ? profile.badges[profile.badges.length - 1]
+      : null;
+
+    return res.json({
+      ...profile,
+      currentLevelXpRequired: currentLevelRequired,
+      progressPercent,
+      nextLevel: nextLevel
+        ? {
+          level: nextLevel.level,
+          title: nextLevel.title,
+          xpRequired: nextLevel.xpRequired,
+          xpRemaining: Math.max(0, nextLevel.xpRequired - profile.xp),
+        }
+        : null,
+      eventsCount: events.length,
+      latestBadge,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP — Endpoints (whatsapp-web.js)
 // ═══════════════════════════════════════════════════════════════
@@ -4813,6 +5326,7 @@ await ensureAgendaStorage();
 await ensureUsageStorage();
 await ensureEnergyStorage();
 await ensureTimeLogsStorage();
+await ensureGamificationStorage();
 
 app.listen(PORT, () => {
   console.log('');

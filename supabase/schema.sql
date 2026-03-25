@@ -77,7 +77,33 @@ create table if not exists public.ser_time_logs (
 create index if not exists ser_time_logs_task_idx on public.ser_time_logs (task_id);
 create index if not exists ser_time_logs_date_idx on public.ser_time_logs (date desc);
 
+create table if not exists public.ser_gamification (
+  id text primary key default 'sergio',
+  xp integer default 0,
+  level integer default 1,
+  current_streak integer default 0,
+  best_streak integer default 0,
+  last_active_date text,
+  streak_freezes_remaining integer default 1,
+  badges jsonb default '[]'::jsonb,
+  updated_at timestamptz default now()
+);
+
+create table if not exists public.ser_xp_events (
+  id text primary key default gen_random_uuid()::text,
+  event_type text not null,
+  xp_amount integer not null,
+  description text,
+  metadata jsonb,
+  created_at timestamptz default now()
+);
+
+create index if not exists ser_xp_events_created_idx on public.ser_xp_events (created_at desc);
+create index if not exists ser_xp_events_type_idx on public.ser_xp_events (event_type);
+
 alter table public.ser_tasks disable row level security;
 alter table public.ser_usage_events disable row level security;
 alter table public.ser_energy_checkins disable row level security;
 alter table public.ser_time_logs disable row level security;
+alter table public.ser_gamification disable row level security;
+alter table public.ser_xp_events disable row level security;

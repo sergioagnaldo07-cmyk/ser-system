@@ -131,6 +131,9 @@ const SoundEngine = {
       "chat-tasks-found":()=>{ this._osc(523,"sine",0.15,0.1); setTimeout(()=>this._osc(659,"sine",0.15,0.08),100); setTimeout(()=>this._osc(784,"sine",0.2,0.1),200); },
       "note-save":()=>this._osc(660,"sine",0.12,0.08),
       "energy-checkin":()=>{ this._osc(520,"sine",0.12,0.08); setTimeout(()=>this._osc(620,"sine",0.1,0.07),90); },
+      "level-up":()=>{ this._osc(523,"sine",0.18,0.11); setTimeout(()=>this._osc(659,"sine",0.2,0.11),120); setTimeout(()=>this._osc(784,"sine",0.24,0.12),240); },
+      "badge-unlock":()=>{ this._osc(740,"triangle",0.16,0.09); setTimeout(()=>this._osc(880,"sine",0.18,0.1),110); },
+      "streak-up":()=>{ this._osc(480,"sine",0.1,0.08); setTimeout(()=>this._osc(620,"sine",0.12,0.09),80); },
       "celebration":()=>{ [523,587,659,698,784].forEach((f,i)=>setTimeout(()=>this._osc(f,"sine",0.3,0.1),i*100)); },
     };
     if(s[t]) s[t]();
@@ -561,6 +564,38 @@ function EnergyCheckin({lastEnergy,onCheckin,isSaving,error}) {
       </button>)}
     </div>
     {error&&<div style={{marginTop:6,fontSize:10,color:"#B91C1C",fontWeight:600}}>{error}</div>}
+  </div>;
+}
+
+function GamificationWidget({data}) {
+  const profile = data || {};
+  const xp = Number(profile.xp || 0);
+  const level = Number(profile.level || 1);
+  const levelTitle = profile.levelTitle || "Iniciante";
+  const next = profile.nextLevel || null;
+  const streak = Number(profile.currentStreak || 0);
+  const latestBadge = profile.latestBadge || null;
+  const progress = Number.isFinite(Number(profile.progressPercent))
+    ? Math.max(0, Math.min(100, Number(profile.progressPercent)))
+    : 0;
+  const xpText = next ? `${next.xpRemaining || 0} XP para o próximo nível` : "Nível máximo alcançado";
+
+  return <div style={{background:`linear-gradient(180deg, ${UI.surface} 0%, ${UI.surfaceSoft} 100%)`,border:`1px solid ${UI.lineSoft}`,borderRadius:14,padding:"10px 12px",boxShadow:UI.shadowSm}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:UI.ink}}>Progresso SER</div>
+        <div style={{fontSize:10,color:UI.muted}}>Nível {level} — {levelTitle}</div>
+      </div>
+      <div style={{fontSize:11,fontWeight:700,color:"#0F6E56"}}>🔥 {streak} dia{streak===1?"":"s"}</div>
+    </div>
+    <div style={{height:8,borderRadius:999,background:"#E5E7EB",overflow:"hidden",marginBottom:6}}>
+      <div style={{height:"100%",width:`${progress}%`,background:"linear-gradient(90deg,#1A9A78 0%,#5DCAA5 100%)",transition:"width 0.35s ease"}}/>
+    </div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <span style={{fontSize:10,color:UI.muted}}>{xpText}</span>
+      <span style={{fontSize:10,fontWeight:700,color:UI.inkSoft}}>{xp} XP</span>
+    </div>
+    {latestBadge&&<div style={{marginTop:7,fontSize:10,color:"#7C3AED",fontWeight:700}}>🏅 Badge: {latestBadge.name}</div>}
   </div>;
 }
 
@@ -1126,6 +1161,7 @@ export default function SERSystem() {
   const[soundEnabled,setSoundEnabled]=useState(true);
   const[selectedDate,setSelectedDate]=useState(today());
   const[editingTask,setEditingTask]=useState(null);
+  const[gamification,setGamification]=useState({xp:0,level:1,levelTitle:"Iniciante",currentStreak:0,badges:[],latestBadge:null,nextLevel:null});
   const[syncReady,setSyncReady]=useState(false);
   const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
   const[lastSyncAt,setLastSyncAt]=useState(null);
@@ -1138,6 +1174,7 @@ export default function SERSystem() {
   const streak=useMemo(()=>updateStreak(),[]);
   const pom=usePomodoro();
   const prevPomRef=useRef({running:false,mode:"work"});
+  const prevGamificationRef=useRef({level:1,currentStreak:0,badgeCount:0});
 
   useEffect(()=>{injectStyles();SoundEngine.init();},[]);
   useEffect(()=>{saveData(data);},[data]);
@@ -1149,6 +1186,17 @@ export default function SERSystem() {
     return()=>window.removeEventListener("resize",onResize);
   },[]);
   useEffect(()=>{loadEnergyToday();},[loadEnergyToday]);
+  useEffect(()=>{loadGamificationStatus();},[loadGamificationStatus]);
+  useEffect(()=>{
+    const prev = prevGamificationRef.current;
+    const levelNow = Number(gamification.level || 1);
+    const streakNow = Number(gamification.currentStreak || 0);
+    const badgeCountNow = Array.isArray(gamification.badges) ? gamification.badges.length : 0;
+    if(levelNow > prev.level) SoundEngine.play("level-up");
+    if(streakNow > prev.currentStreak) SoundEngine.play("streak-up");
+    if(badgeCountNow > prev.badgeCount) SoundEngine.play("badge-unlock");
+    prevGamificationRef.current = {level:levelNow,currentStreak:streakNow,badgeCount:badgeCountNow};
+  },[gamification.level,gamification.currentStreak,gamification.badges]);
   useEffect(()=>{
     const todayPending = (data.tasks || []).filter(t => t.date === today() && !t.completedAt);
     if(todayPending.length===0){
@@ -1223,6 +1271,17 @@ export default function SERSystem() {
     }
   }, []);
 
+  const loadGamificationStatus = useCallback(async () => {
+    try {
+      const r = await apiFetch("/api/gamification/status");
+      if (!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>({}));
+      setGamification(prev => ({ ...prev, ...d }));
+    } catch {
+      // silencioso: widget é complementar
+    }
+  }, []);
+
   const submitEnergyCheckin = useCallback(async (energyLevel) => {
     if(!energyLevel) return;
     setEnergyState(prev => ({ ...prev, loading:true, error:null }));
@@ -1243,11 +1302,12 @@ export default function SERSystem() {
       });
       SoundEngine.play("energy-checkin");
       setToast({message:`Energia registrada: ${energyLevel}.`});
+      await loadGamificationStatus();
     } catch (err) {
       const message = String(err?.message || "Falha ao salvar energia.");
       setEnergyState(prev => ({...prev,loading:false,error:/nao autorizado|não autorizado/i.test(message)?"Sem permissão para check-in.":"Não consegui salvar o check-in agora."}));
     }
-  }, []);
+  }, [loadGamificationStatus]);
 
   const upsertTaskFromServer = useCallback((task) => {
     if(!task?.id) return;
@@ -1286,6 +1346,7 @@ export default function SERSystem() {
       if(!options.silent){
         setToast({message:`Tempo registrado: ${d?.log?.durationMinutes || 0} min.`});
       }
+      await loadGamificationStatus();
       return true;
     }catch(err){
       setToast({message:"Não consegui finalizar o timer agora."});
@@ -1293,7 +1354,7 @@ export default function SERSystem() {
     }finally{
       setTimeLogBusy(false);
     }
-  }, [upsertTaskFromServer]);
+  }, [upsertTaskFromServer,loadGamificationStatus]);
 
   const handlePomodoroToggle = useCallback(async () => {
     if(pom.running){
@@ -1428,7 +1489,8 @@ export default function SERSystem() {
     setData(d=>{const task=d.tasks.find(t=>t.id===taskId);if(!task)return d;const nowIso=new Date().toISOString();const completed={...task,completedAt:nowIso,updatedAt:nowIso,steps:task.steps.map(s=>({...s,done:true}))};return{...d,tasks:d.tasks.filter(t=>t.id!==taskId),history:sortHistoryList([...(d.history||[]),completed])};});
     setExpandedTask(null);SoundEngine.play("task-complete");setToast({message:"Tarefa concluída!",taskId});
     setTimeout(()=>{const remaining=data.tasks.filter(t=>t.id!==taskId&&t.date===today()&&!t.completedAt);if(remaining.length===0&&data.tasks.filter(t=>t.date===today()).length>1){setShowConfetti(true);SoundEngine.play("celebration");setTimeout(()=>setShowConfetti(false),2000);}},100);
-  },[data.tasks]);
+    setTimeout(()=>{loadGamificationStatus();},1200);
+  },[data.tasks,loadGamificationStatus]);
   const deleteTask=useCallback((taskId)=>{const task=data.tasks.find(t=>t.id===taskId);SoundEngine.play("task-delete");setData(d=>({...d,tasks:d.tasks.filter(t=>t.id!==taskId)}));setExpandedTask(null);if(task){setToast({message:"Tarefa removida",onUndo:()=>setData(d=>({...d,tasks:[...d.tasks,task]}))});}},[data.tasks]);
   const reschedule=useCallback((taskId,newDate)=>{SoundEngine.play("click");setData(d=>({...d,tasks:d.tasks.map(t=>t.id===taskId?{...t,date:newDate,updatedAt:new Date().toISOString()}:t)}));setExpandedTask(null);setToast({message:`Movida pra ${getDateLabel(newDate)}`});},[]);
   const saveEditedTask=useCallback((updatedTask)=>{setData(d=>({...d,tasks:d.tasks.map(t=>t.id===updatedTask.id?{...updatedTask,updatedAt:updatedTask.updatedAt||new Date().toISOString()}:t)}));setExpandedTask(null);setToast({message:"Tarefa atualizada!"});},[]);
@@ -1524,6 +1586,10 @@ export default function SERSystem() {
               onResetPomodoro={handlePomodoroReset}
               timeLogBusy={timeLogBusy}
             />
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <GamificationWidget data={gamification}/>
           </div>
 
           <div style={{marginBottom:12}}><ActiveBlockIndicator/></div>
