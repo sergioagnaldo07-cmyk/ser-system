@@ -3332,10 +3332,30 @@ async function completeTaskById(taskId = '') {
 }
 
 async function buildEndOfDayReportMessage() {
-  return ensureWhatsAppResponseStyle(
-    'Pode ir dormir e descansar tranquilo, senhor, que eu vou seguir trabalhando e cuidando da agenda por aqui.',
-    { appendQuestion: false }
-  );
+  const today = todayLocalISO();
+  const agenda = await readAgendaData();
+  const dayTasks = (agenda.tasks || []).filter((task) => task.date === today);
+  const completed = dayTasks.filter((task) => Boolean(task.completedAt));
+  const pending = dayTasks.filter((task) => !task.completedAt);
+
+  const lines = [];
+  if (completed.length > 0) {
+    lines.push(`Fim do expediente, senhor. Hoje foram ${completed.length} tarefa${completed.length > 1 ? 's' : ''} concluída${completed.length > 1 ? 's' : ''}.`);
+  } else {
+    lines.push('Fim do expediente, senhor.');
+  }
+
+  if (pending.length > 0) {
+    lines.push(`Ficaram ${pending.length} pendente${pending.length > 1 ? 's' : ''}:`);
+    pending.slice(0, 5).forEach((task) => {
+      lines.push(`- ${task.title}`);
+    });
+    lines.push('Quer que eu mova pra amanhã?');
+  } else {
+    lines.push('Tudo concluído. Descansa tranquilo.');
+  }
+
+  return ensureWhatsAppResponseStyle(lines.join('\n'), { appendQuestion: false });
 }
 
 async function buildWeeklyCostReportMessage() {

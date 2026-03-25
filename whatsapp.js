@@ -372,24 +372,85 @@ function buildAgendaSnapshotByDate(tasks = [], targetDate) {
 }
 
 async function buildMorningBriefMessage() {
-  return ensureFollowUpStyle(
-    'Bom dia, senhor. Precisando de mim, já estou por aqui.',
-    { appendQuestion: false }
-  );
+  const today = localDateISO();
+  const tasks = typeof getAgendaTasksFn === 'function' ? await getAgendaTasksFn() : [];
+  const dayTasks = buildAgendaSnapshotByDate(tasks, today);
+
+  if (dayTasks.length === 0) {
+    return ensureFollowUpStyle(
+      'Bom dia, senhor. Agenda limpa hoje. Quer que eu crie alguma tarefa?',
+      { appendQuestion: false }
+    );
+  }
+
+  const totalMinutes = dayTasks.reduce((sum, task) => sum + (task?.estimatedTime || 30), 0);
+  const totalHours = (totalMinutes / 60).toFixed(1);
+  const withTime = dayTasks.filter((task) => task?.startTime).sort((a, b) => a.startTime.localeCompare(b.startTime));
+  const withoutTime = dayTasks.filter((task) => !task?.startTime);
+
+  const lines = [
+    `Bom dia, senhor. Hoje tem ${dayTasks.length} tarefa${dayTasks.length > 1 ? 's' : ''}, ~${totalHours}h estimadas.`,
+  ];
+
+  if (totalMinutes > 480) {
+    lines.push('Atenção: isso passa de 8h. Vamos priorizar o essencial.');
+  }
+
+  if (withTime.length > 0) {
+    lines.push('');
+    lines.push('Compromissos fixos:');
+    withTime.slice(0, 5).forEach((task) => {
+      lines.push(`${task.startTime} - ${task.title} [${task.frente}]`);
+    });
+  }
+
+  if (withoutTime.length > 0) {
+    lines.push('');
+    lines.push('Sem horário definido:');
+    withoutTime.slice(0, 5).forEach((task) => {
+      lines.push(`- ${task.title} [${task.frente}]`);
+    });
+  }
+
+  lines.push('');
+  lines.push('Quer ajustar algo antes de começar?');
+
+  return ensureFollowUpStyle(formatWhatsAppCoreText(lines.join('\n')), { appendQuestion: false });
 }
 
 async function buildMiddayCheckinMessage() {
   const today = localDateISO();
   const tasks = typeof getAgendaTasksFn === 'function' ? await getAgendaTasksFn() : [];
-  const dayTasks = buildAgendaSnapshotByDate(tasks, today);
-  const pending = dayTasks.length;
-  if (pending === 0) {
-    return ensureFollowUpStyle('Check-in do meio do dia: sem pendências na agenda de hoje até agora.');
+  const dayTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => task?.date === today);
+  const completed = dayTasks.filter((task) => Boolean(task?.completedAt));
+  const pending = dayTasks.filter((task) => !task?.completedAt);
+
+  if (dayTasks.length === 0) {
+    return ensureFollowUpStyle(
+      'Meio do dia, senhor. Agenda continua limpa.',
+      { appendQuestion: false }
+    );
   }
-  const next = dayTasks.find((task) => task.startTime) || dayTasks[0];
-  return ensureFollowUpStyle(
-    `Check-in do meio do dia.\nPendências de hoje: ${pending}.\nPróximo foco: ${next.startTime ? `${next.startTime} ` : ''}${next.title}.`
-  );
+
+  const lines = [];
+  if (completed.length > 0) {
+    lines.push(`Metade do dia. Já concluiu ${completed.length} de ${dayTasks.length} tarefa${dayTasks.length > 1 ? 's' : ''}.`);
+  } else {
+    lines.push(`Metade do dia, senhor. Ainda nenhuma tarefa concluída de ${dayTasks.length}.`);
+  }
+
+  if (pending.length > 0) {
+    const next = pending.find((task) => task?.startTime) || pending[0];
+    lines.push(`Próximo foco: ${next?.startTime ? `${next.startTime} ` : ''}${next?.title || 'tarefa sem título'}.`);
+
+    if (pending.length > 3) {
+      lines.push(`Ainda tem ${pending.length} pendentes. Precisa repriorizar?`);
+    }
+  } else {
+    lines.push('Tudo concluído. Pode descansar ou adiantar o de amanhã.');
+  }
+
+  return ensureFollowUpStyle(lines.join('\n'));
 }
 
 async function runSmartRemindersTick() {
