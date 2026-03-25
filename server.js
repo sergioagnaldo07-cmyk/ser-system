@@ -5512,6 +5512,90 @@ app.get('/api/gamification/status', requireReadAccess, async (_req, res) => {
   }
 });
 
+app.get('/api/analytics', requireReadAccess, async (req, res) => {
+  try {
+    const rawPeriod = String(req.query?.period || 'month').trim();
+    const period = ['week', 'month', 'quarter'].includes(rawPeriod) ? rawPeriod : 'month';
+    const today = todayLocalISO();
+    const daysBack = period === 'week' ? 7 : period === 'quarter' ? 90 : 30;
+    const start = addDaysISO(today, -(daysBack - 1));
+
+    const agenda = await readAgendaData();
+    const tasks = (agenda.tasks || []).filter((task) => task.date >= start && task.date <= today);
+    const completed = tasks.filter((task) => Boolean(task.completedAt));
+    const completionRate = tasks.length > 0 ? (completed.length / tasks.length) : 0;
+
+    const completionsByDayMap = new Map();
+    const createdByDayMap = new Map();
+    const frenteMap = new Map([
+      ['taka', 0],
+      ['haldan', 0],
+      ['pessoal', 0],
+    ]);
+
+    for (let i = 0; i < daysBack; i += 1) {
+      const key = addDaysISO(today, -i);
+      completionsByDayMap.set(key, 0);
+      createdByDayMap.set(key, 0);
+    }
+
+    tasks.forEach((task) => {
+      const createdKey = normalizeDate(task.date || today);
+      createdByDayMap.set(createdKey, (createdByDayMap.get(createdKey) || 0) + 1);
+      const frente = String(task.frente || '');
+      if (frenteMap.has(frente)) {
+        frenteMap.set(frente, (frenteMap.get(frente) || 0) + 1);
+      }
+      if (task.completedAt) {
+        const completedKey = normalizeDate(String(task.completedAt).slice(0, 10));
+        if (completionsByDayMap.has(completedKey)) {
+          completionsByDayMap.set(completedKey, (completionsByDayMap.get(completedKey) || 0) + 1);
+        }
+      }
+    });
+
+    const completionsByDay = [...completionsByDayMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, count]) => ({ date, count }));
+    const createdByDay = [...createdByDayMap.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, count]) => ({ date, count }));
+    const distributionByFrente = [...frenteMap.entries()].map(([frente, count]) => ({
+      frente,
+      label: FRENTES[frente] || frente,
+      count,
+      percentage: tasks.length > 0 ? (count / tasks.length) : 0,
+    }));
+
+    const estimatedMinutes = completed.reduce((sum, task) => sum + (Number(task.estimatedTime || 30) || 30), 0);
+    const actualMinutes = completed.reduce((sum, task) => sum + (Number(task.actualTime || task.estimatedTime || 30) || 30), 0);
+
+    return res.json({
+      period,
+      start,
+      end: today,
+      totals: {
+        tasks: tasks.length,
+        completed: completed.length,
+        pending: tasks.length - completed.length,
+        completionRate,
+      },
+      time: {
+        estimatedMinutes,
+        actualMinutes,
+      },
+      completionsByDay,
+      createdByDay,
+      distributionByFrente,
+      streak: {
+        current: Number((await readGamificationState()).profile?.currentStreak || 0),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // WHATSAPP — Endpoints (whatsapp-web.js)
 // ═══════════════════════════════════════════════════════════════

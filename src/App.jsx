@@ -1109,7 +1109,16 @@ function WhatsAppSetup() {
   </div>;
 }
 
-function ConfigView({soundEnabled,onToggleSound,sops}) {
+function ConfigView({soundEnabled,onToggleSound,sops,analytics,analyticsLoading,analyticsError,analyticsPeriod,onChangeAnalyticsPeriod}) {
+  const analyticsData = analytics || {};
+  const totals = analyticsData.totals || {};
+  const completionRate = Math.round((Number(totals.completionRate || 0)) * 100);
+  const completionsByDay = Array.isArray(analyticsData.completionsByDay) ? analyticsData.completionsByDay : [];
+  const frenteDist = Array.isArray(analyticsData.distributionByFrente) ? analyticsData.distributionByFrente : [];
+  const maxCompletions = Math.max(1,...completionsByDay.map(item=>Number(item.count||0)));
+  const estimatedMinutes = Number(analyticsData?.time?.estimatedMinutes || 0);
+  const actualMinutes = Number(analyticsData?.time?.actualMinutes || 0);
+
   return<div>
     <h3 style={{margin:"0 0 14px",fontSize:15,fontWeight:600}}>Configurações</h3>
     <div style={{background:"#fff",borderRadius:12,border:"1px solid #E8E6DF",overflow:"hidden",marginBottom:14}}>
@@ -1119,6 +1128,45 @@ function ConfigView({soundEnabled,onToggleSound,sops}) {
       </div>
     </div>
     <WhatsAppSetup/>
+    <div style={{background:"#fff",borderRadius:12,border:"1px solid #E8E6DF",padding:"12px 14px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <h4 style={{fontSize:13,fontWeight:600,margin:0}}>Analytics</h4>
+        <div style={{display:"flex",gap:4}}>
+          {[{id:"week",label:"7d"},{id:"month",label:"30d"},{id:"quarter",label:"90d"}].map(p=><button key={p.id} onClick={()=>onChangeAnalyticsPeriod&&onChangeAnalyticsPeriod(p.id)} style={{padding:"4px 8px",borderRadius:999,border:`1px solid ${analyticsPeriod===p.id?"#D1D5FF":"#E8E6DF"}`,background:analyticsPeriod===p.id?"#EEF2FF":"#fff",fontSize:10,fontWeight:700,cursor:"pointer"}}>{p.label}</button>)}
+        </div>
+      </div>
+      {analyticsError&&<div style={{fontSize:11,color:"#B91C1C",marginBottom:8}}>{analyticsError}</div>}
+      {analyticsLoading?<div style={{fontSize:11,color:"#888"}}>Carregando métricas...</div>:<div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:6,marginBottom:8}}>
+          <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,padding:"8px"}}>
+            <div style={{fontSize:10,color:"#64748B"}}>Taxa de conclusão</div>
+            <div style={{fontSize:16,fontWeight:700,color:"#0F6E56"}}>{completionRate}%</div>
+          </div>
+          <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,padding:"8px"}}>
+            <div style={{fontSize:10,color:"#64748B"}}>Streak</div>
+            <div style={{fontSize:16,fontWeight:700,color:"#B45309"}}>🔥 {analyticsData?.streak?.current || 0}</div>
+          </div>
+        </div>
+        <div style={{fontSize:11,fontWeight:700,color:"#334155",marginBottom:4}}>Concluídas por dia</div>
+        <div style={{display:"flex",alignItems:"flex-end",gap:4,height:62,marginBottom:8,padding:"4px 0"}}>
+          {completionsByDay.slice(-14).map(item=><div key={item.date} style={{flex:1,minWidth:0,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+            <div style={{width:"100%",maxWidth:14,height:Math.max(3,Math.round((Number(item.count||0)/maxCompletions)*44)),borderRadius:6,background:"#8189FF"}}/>
+            <span style={{fontSize:8,color:"#94A3B8"}}>{String(item.date).slice(8,10)}</span>
+          </div>)}
+        </div>
+        <div style={{fontSize:11,fontWeight:700,color:"#334155",marginBottom:4}}>Distribuição por frente</div>
+        {frenteDist.map(item=><div key={item.frente} style={{marginBottom:4}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#475569",marginBottom:2}}>
+            <span>{item.label}</span>
+            <span>{Math.round((Number(item.percentage||0))*100)}%</span>
+          </div>
+          <div style={{height:6,borderRadius:999,background:"#E5E7EB",overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${Math.round((Number(item.percentage||0))*100)}%`,background:item.frente==="taka"?"#DE5A4A":item.frente==="haldan"?"#1A9A78":"#626BE8"}}/>
+          </div>
+        </div>)}
+        <div style={{fontSize:10,color:"#64748B",marginTop:6}}>Tempo estimado x real: {Math.round(estimatedMinutes/60*10)/10}h vs {Math.round(actualMinutes/60*10)/10}h</div>
+      </div>}
+    </div>
     <div style={{background:"#FAFAF8",borderRadius:12,padding:"12px 14px",marginBottom:14,border:"1px solid #E8E6DF"}}>
       <div style={{fontSize:10,fontWeight:600,color:"#888",marginBottom:4,textTransform:"uppercase"}}>Backlog</div>
       <div style={{fontSize:12,color:"#555",lineHeight:1.6}}>• Google Calendar sync<br/>• Google Drive (salvar entregas)</div>
@@ -1179,6 +1227,7 @@ export default function SERSystem() {
   const[editingTask,setEditingTask]=useState(null);
   const[gamification,setGamification]=useState({xp:0,level:1,levelTitle:"Iniciante",currentStreak:0,badges:[],latestBadge:null,nextLevel:null});
   const[burnoutState,setBurnoutState]=useState({score:0,level:"saudavel",suggestion:""});
+  const[analyticsState,setAnalyticsState]=useState({period:"month",data:null,loading:false,error:null});
   const[syncReady,setSyncReady]=useState(false);
   const[syncStatus,setSyncStatus]=useState({mode:"connecting",message:"Sincronizando agenda..."});
   const[lastSyncAt,setLastSyncAt]=useState(null);
@@ -1209,6 +1258,15 @@ export default function SERSystem() {
     const iv=setInterval(()=>{loadBurnoutScore();},180000);
     return()=>clearInterval(iv);
   },[loadBurnoutScore]);
+  useEffect(()=>{
+    if(view!=="config") return;
+    loadAnalytics(analyticsState.period || "month");
+  },[view,analyticsState.period,loadAnalytics]);
+  useEffect(()=>{
+    if(view!=="config") return;
+    const iv=setInterval(()=>{loadAnalytics(analyticsState.period || "month");},180000);
+    return()=>clearInterval(iv);
+  },[view,analyticsState.period,loadAnalytics]);
   useEffect(()=>{
     const prev = prevGamificationRef.current;
     const levelNow = Number(gamification.level || 1);
@@ -1318,6 +1376,19 @@ export default function SERSystem() {
       // silencioso
     }
   }, []);
+
+  const loadAnalytics = useCallback(async (period = analyticsState.period || "month") => {
+    setAnalyticsState(prev=>({...prev,loading:true,error:null,period}));
+    try {
+      const r = await apiFetch(`/api/analytics?period=${encodeURIComponent(period)}`);
+      if (!r.ok) throw new Error(await extractApiError(r));
+      const d = await r.json().catch(()=>null);
+      setAnalyticsState(prev=>({...prev,data:d,loading:false,error:null,period}));
+    } catch (err) {
+      const msg = String(err?.message || "Falha ao carregar analytics.");
+      setAnalyticsState(prev=>({...prev,loading:false,error:/nao autorizado|não autorizado/i.test(msg)?"Sem permissão para analytics.":"Sem conexão para analytics agora."}));
+    }
+  }, [analyticsState.period]);
 
   const submitEnergyCheckin = useCallback(async (energyLevel) => {
     if(!energyLevel) return;
@@ -1751,7 +1822,16 @@ export default function SERSystem() {
 
         {view==="notes"&&<NotesView notes={data.notes||[]} onSave={notes=>setData(d=>({...d,notes}))}/>}
         {view==="ai"&&<AIChatView/>}
-        {view==="config"&&<ConfigView soundEnabled={soundEnabled} onToggleSound={()=>setSoundEnabled(v=>!v)} sops={data.sops}/>}
+        {view==="config"&&<ConfigView
+          soundEnabled={soundEnabled}
+          onToggleSound={()=>setSoundEnabled(v=>!v)}
+          sops={data.sops}
+          analytics={analyticsState.data}
+          analyticsLoading={analyticsState.loading}
+          analyticsError={analyticsState.error}
+          analyticsPeriod={analyticsState.period}
+          onChangeAnalyticsPeriod={(period)=>loadAnalytics(period)}
+        />}
       </W>
     </div>
 
