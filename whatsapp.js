@@ -239,6 +239,49 @@ function ensureFollowUpStyle(text, options = {}) {
   return formatWhatsAppCoreText(output).slice(0, 2000);
 }
 
+async function simulateTyping(chatId = '', textLength = 0, options = {}) {
+  if (!client || connectionStatus !== 'connected' || !chatId) return;
+  const chars = Math.max(1, Number(textLength) || 1);
+  const minMs = Number(options.minMs || 1500);
+  const maxMs = Number(options.maxMs || 8000);
+  const msPerChar = Number(options.msPerChar || 35);
+  const typingMs = Math.min(maxMs, Math.max(minMs, Math.round(chars * msPerChar)));
+
+  try {
+    const chat = await client.getChatById(chatId);
+    await chat.sendStateTyping();
+    await new Promise((resolve) => setTimeout(resolve, typingMs));
+    await chat.clearState();
+  } catch {
+    // typing indicator é cosmético
+  }
+}
+
+async function sendHumanLikeReply(msg, text = '') {
+  const finalText = String(text || '').trim();
+  if (!finalText) return;
+
+  const paragraphs = finalText.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length <= 2) {
+    await simulateTyping(msg.from, finalText.length, { maxMs: 5000, msPerChar: 30 });
+    await msg.reply(finalText);
+    return;
+  }
+
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    const chunk = paragraphs[i];
+    await simulateTyping(msg.from, chunk.length, { minMs: 1200, maxMs: 4000, msPerChar: 35 });
+    if (i === 0) {
+      await msg.reply(chunk);
+    } else {
+      await client.sendMessage(msg.from, chunk);
+    }
+    if (i < paragraphs.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 800 + Math.round(Math.random() * 1200)));
+    }
+  }
+}
+
 function taskReminderKey(task, offsetMinutes) {
   const idPart = String(task.id || task.title || 'sem-id');
   return `${idPart}|${task.date || ''}|${task.startTime || ''}|${offsetMinutes}`;
@@ -614,6 +657,19 @@ function initClient() {
       return;
     }
 
+    try {
+      const chat = await client.getChatById(msg.from);
+      await chat.sendSeen();
+    } catch {
+      // silencioso
+    }
+
+    try {
+      await msg.react('👀');
+    } catch {
+      // silencioso
+    }
+
     if (!normalizePhone(userPhoneNumber) && senderNumber) {
       userPhoneNumber = senderNumber;
       console.log(`[WhatsApp] Número de lembrete configurado automaticamente: ${senderNumber}`);
@@ -690,10 +746,20 @@ function initClient() {
       const replyText = typeof response === 'string'
         ? response.trim()
         : (typeof response?.text === 'string' ? response.text.trim() : '');
+      const reaction = typeof response?.reaction === 'string'
+        ? String(response.reaction || '').trim()
+        : '';
 
       if (replyText) {
-        await msg.reply(replyText);
+        await sendHumanLikeReply(msg, replyText);
         console.log(`[WhatsApp] Resposta enviada para ${senderNumber}`);
+      }
+      if (reaction) {
+        try {
+          await msg.react(reaction);
+        } catch {
+          // silencioso
+        }
       }
     } catch (err) {
       console.error('[WhatsApp] Erro ao processar mensagem:', err.message);

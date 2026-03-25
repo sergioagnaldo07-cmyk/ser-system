@@ -54,8 +54,21 @@ const APP_CHAT_HISTORY_LIMIT = Number(process.env.APP_CHAT_HISTORY_LIMIT || 5);
 const APP_CHAT_MAX_CHARS_PER_MESSAGE = Number(process.env.APP_CHAT_MAX_CHARS_PER_MESSAGE || 650);
 const OPENAI_CACHE_TTL_MS = Math.max(0, Number(process.env.OPENAI_CACHE_TTL_MS || 300000));
 const OPENAI_CACHE_MAX_ITEMS = Math.max(50, Number(process.env.OPENAI_CACHE_MAX_ITEMS || 600));
-const WHATSAPP_LLM_HISTORY_TURNS = Math.max(0, Number(process.env.WHATSAPP_LLM_HISTORY_TURNS || 1));
-const WHATSAPP_LLM_HISTORY_TTL_MS = Math.max(60000, Number(process.env.WHATSAPP_LLM_HISTORY_TTL_MS || 900000));
+const WHATSAPP_CONTEXT_MESSAGES = Math.max(
+  0,
+  Number(
+    process.env.WHATSAPP_CONTEXT_MESSAGES
+      || (Number(process.env.WHATSAPP_LLM_HISTORY_TURNS || 3) * 2)
+  )
+);
+const WHATSAPP_CONTEXT_TTL_MS = Math.max(
+  60000,
+  Number(
+    process.env.WHATSAPP_CONTEXT_TTL_MS
+      || process.env.WHATSAPP_LLM_HISTORY_TTL_MS
+      || (30 * 60 * 1000)
+  )
+);
 const TRANSCRIBE_MODEL = process.env.OPENAI_MODEL_TRANSCRIBE || 'gpt-4o-mini-transcribe';
 const TRANSCRIBE_RESPONSE_FORMAT = String(
   process.env.OPENAI_TRANSCRIBE_RESPONSE_FORMAT || 'json'
@@ -119,6 +132,15 @@ const FRENTE_EMOJIS = Object.freeze({
   taka: '🦅',
   haldan: '🦎',
   pessoal: '🏌️',
+});
+const ACTION_REACTIONS = Object.freeze({
+  create: '📝',
+  complete: '✅',
+  update: '🔄',
+  delete: '🗑️',
+  list: '📋',
+  append_step: '🧩',
+  default: '👍',
 });
 const SELECTOR_STOPWORDS = new Set([
   'a', 'o', 'as', 'os', 'um', 'uma', 'uns', 'umas',
@@ -2445,34 +2467,62 @@ function setCachedOpenAIResponse(cacheKey, text, ttlMs = OPENAI_CACHE_TTL_MS) {
 }
 
 function getWhatsAppConversationContext(senderNumber = '') {
-  if (!senderNumber || WHATSAPP_LLM_HISTORY_TURNS <= 0) return [];
+  if (!senderNumber || WHATSAPP_CONTEXT_MESSAGES <= 0) return [];
   const entry = whatsappConversationCache.get(senderNumber);
   if (!entry) return [];
   if (entry.expiresAt <= Date.now()) {
     whatsappConversationCache.delete(senderNumber);
     return [];
   }
-  const limit = Math.max(1, WHATSAPP_LLM_HISTORY_TURNS) * 2;
+  const limit = Math.max(1, WHATSAPP_CONTEXT_MESSAGES);
   return (entry.messages || [])
     .slice(-limit)
     .map((msg) => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: trimTextForModel(msg.content || '', 220),
+      content: trimTextForModel(msg.content || '', 260),
     }))
     .filter((msg) => msg.content);
 }
 
-function saveWhatsAppConversationTurn(senderNumber = '', userText = '', assistantText = '') {
-  if (!senderNumber || WHATSAPP_LLM_HISTORY_TURNS <= 0) return;
+function addWhatsAppConversationMessage(senderNumber = '', role = 'user', content = '') {
+  if (!senderNumber || WHATSAPP_CONTEXT_MESSAGES <= 0) return;
+  const safeContent = trimTextForModel(content || '', 260);
+  if (!safeContent) return;
+
+  const now = Date.now();
   const current = getWhatsAppConversationContext(senderNumber).map((msg) => ({ ...msg }));
-  current.push({ role: 'user', content: trimTextForModel(userText || '', 220) });
-  current.push({ role: 'assistant', content: trimTextForModel(assistantText || '', 220) });
-  const limit = Math.max(1, WHATSAPP_LLM_HISTORY_TURNS) * 2;
-  const sliced = current.slice(-limit);
+  current.push({
+    role: role === 'assistant' ? 'assistant' : 'user',
+    content: safeContent,
+  });
+  const keep = Math.max(20, WHATSAPP_CONTEXT_MESSAGES + 8);
+  const sliced = current.slice(-keep);
   whatsappConversationCache.set(senderNumber, {
     messages: sliced,
-    expiresAt: Date.now() + WHATSAPP_LLM_HISTORY_TTL_MS,
+    expiresAt: now + WHATSAPP_CONTEXT_TTL_MS,
   });
+}
+
+function saveWhatsAppConversationTurn(senderNumber = '', userText = '', assistantText = '') {
+  addWhatsAppConversationMessage(senderNumber, 'user', userText);
+  addWhatsAppConversationMessage(senderNumber, 'assistant', assistantText);
+}
+
+function inferWhatsAppReaction(actions = [], options = {}) {
+  const list = Array.isArray(actions) ? actions : [];
+  for (const action of list) {
+    const type = String(action?.type || '').toLowerCase();
+    if (ACTION_REACTIONS[type]) return ACTION_REACTIONS[type];
+  }
+  if (options.hasListOutput) return ACTION_REACTIONS.list;
+  return options.fallback || ACTION_REACTIONS.default;
+}
+
+function buildWhatsAppResponsePayload(text, reaction = ACTION_REACTIONS.default) {
+  return {
+    text: String(text || '').trim(),
+    reaction,
+  };
 }
 
 async function callOpenAI(systemPrompt, messages, maxTokens = 1500, options = {}) {
@@ -3396,45 +3446,56 @@ async function transcribeAudioForWhatsApp({ base64Data, mimeType, fileName } = {
 }
 
 // ─── System Prompt compartilhado (SER Coach) ───
-const SER_COACH_PROMPT = `Você é o SER Coach do senhor Sergio no Sistema SER.
-Foco: produtividade sustentável + bem-estar.
+const SER_COACH_PROMPT = `Você é o SER Coach — coach de produtividade e bem-estar do Sergio.
 
-Contexto fixo:
-- 3 frentes: Estúdio Taka, Haldan, Pessoal.
-- Usa Pomodoro (25/5), tende a sobrecarga.
-- Família é prioridade (Mari e chegada do filho).
+QUEM É SERGIO: Gerencia 3 frentes (Estúdio Taka, Haldan, Pessoal). Parceira: Mari, esperando um filho. Tende a se sobrecarregar. Usa Pomodoro (25/5).
 
-Diretrizes:
-- Trate sempre como "senhor" (nunca "você").
-- Respostas curtas (2-4 linhas), claras e práticas.
-- Se travou: identifique se é energia, decisão ou informação e proponha 1 próximo passo.
-- Se tarefa difícil: quebre em blocos de 10-15 min.
-- Se agenda estiver pesada: priorize top 3 e adie o restante.
-- Após 20h: sugerir encerramento e recuperação.
-- No máximo 1 emoji por resposta.
-- Se sair do escopo (produtividade/bem-estar), redirecione com educação.`;
+COMO AGIR:
+- Algo difícil -> "Pausa 5min. Água. Alonga. Depois quebramos isso em partes menores."
+- Travado -> Pergunte: "É falta de informação, decisão ou energia?" e ajude conforme a causa.
+- Quer desistir -> "Mais 10 minutos? Se continuar ruim, reagenda sem culpa."
+- Completou tarefa -> Celebre brevemente: "Boa, senhor. Mais uma riscada."
+- +8h de tarefas -> "Pesado demais. Prioriza 3, resto vai pra amanhã."
+- Após 20h -> "Já deu por hoje. Descansa."
+- Sem pausa -> "Quando foi a última pausa? Respeita o Pomodoro."
 
-const WHATSAPP_AGENT_PROMPT = `Você é o SER WhatsApp Agent (PT-BR). Objetivo: conversar com o senhor Sergio e operar agenda com precisão.
+TOM: Direto, curto (2-4 linhas), profissional e acolhedor. Trate como "senhor", nunca "você". Max 1 emoji por mensagem. PT-BR claro. Foco em PRODUTIVIDADE e BEM-ESTAR.`;
 
-Retorne APENAS JSON:
-{"reply":"texto","actions":[{"type":"create|update|append_step|delete|complete|list","task":{},"selector":{},"updates":{},"step":{"text":"string","time":15},"date":"YYYY-MM-DD"}],"ask":null}
+const WHATSAPP_AGENT_PROMPT = `Você é o SER Coach no WhatsApp — assistente pessoal de produtividade do Sergio.
 
-Regras de execução:
-- Use actions somente para agenda.
-- concluir/finalizar => type:"complete".
-- mover/reagendar => type:"update" com updates.date e/ou updates.startTime.
-- mudar frente => type:"update" com updates.frente.
-- cobrar todo dia => followUpDaily=true e followUpTime="HH:MM".
-- Em create, task.title é obrigatório: gere um título curto e claro a partir da frase do usuário.
-- Se faltar referência da tarefa, actions=[] e peça nome exato ou código curto.
-- Se a frente não estiver clara ao criar, pergunte: "Taka, Haldan ou Pessoal?".
-- Se CONTEXTO_AGENDA_DISPONIVEL=false, não assuma tarefa existente para update/delete/complete.
-- Não invente IDs.
-- Datas em YYYY-MM-DD e horário em HH:MM ou null.
-- Texto curto, profissional e chamando o usuário de "senhor".
+PERSONALIDADE:
+- Fale como um colega experiente e atencioso, não como um robô.
+- Use frases curtas e naturais, como numa conversa real de WhatsApp.
+- Trate Sergio como "senhor" com naturalidade, sem excesso de formalidade.
+- Use no máximo 1 emoji por mensagem, e só quando fizer sentido.
+- Nunca use markdown (sem *, **, #, etc.).
+- Respostas de 1-4 linhas no máximo para conversas normais.
+- Pode usar até 8 linhas quando estiver listando agenda ou quebrando tarefa.
 
-Frentes: taka|haldan|pessoal.
-Tipos: Reunião|SEO|WordPress|Conteúdo|Follow-up|Proposta|Gestão equipe|Alimentação|Esporte|Casa|Outro.`;
+CONTEXTO DO SERGIO:
+- Gerencia 3 frentes: Estúdio Taka (agência de marketing), Haldan (gerência), Pessoal (casa/saúde/Mari).
+- Tem parceira (Mari), esperando um filho.
+- Tende a se sobrecarregar — proteja-o disso.
+- Usa Pomodoro (25min foco + 5min pausa).
+
+COMO AGIR:
+- Se ele pedir algo da agenda -> execute via actions.
+- Se ele parecer cansado/frustrado -> sugira pausa, não mais trabalho.
+- Se ele disser "bom dia" -> responda naturalmente e diga quantas tarefas tem hoje.
+- Se ele confirmar algo ("ok", "beleza") -> responda breve.
+- Se ele perguntar fora de produtividade -> redirecione com leveza.
+
+RETORNE APENAS JSON:
+{"reply":"sua resposta ao Sergio","actions":[{"type":"create|update|append_step|delete|complete|list","task":{},"selector":{},"updates":{},"step":{"text":"string","time":15},"date":"YYYY-MM-DD"}],"ask":null}
+
+REGRAS DE AÇÕES:
+- create: precisa de task.title, task.date (YYYY-MM-DD), task.startTime (HH:MM ou null), task.frente, task.type.
+- update: precisa de selector.id ou selector.title + updates com os campos a mudar.
+- complete/delete: precisa de selector.id ou selector.title.
+- list: precisa de date (YYYY-MM-DD) para listar agenda do dia.
+- Se não souber qual tarefa o senhor quer mexer, NÃO invente — pergunte.
+- Frentes: taka|haldan|pessoal.
+- Tipos: Reunião|SEO|WordPress|Conteúdo|Follow-up|Proposta|Gestão equipe|Alimentação|Esporte|Casa|Outro.`;
 
 function shouldSendAgendaContextToWhatsAppModel(text = '') {
   const n = normalizeText(text);
@@ -3631,29 +3692,38 @@ async function processWhatsAppMessage({ text, sourceType = 'text', senderNumber 
   const likelyMutatingIntent = hasMutatingIntentText(userText);
 
   if (hasPriorityIntent(userText)) {
-    return agendaAwarePriorityMessage(tasks);
+    return buildWhatsAppResponsePayload(agendaAwarePriorityMessage(tasks), ACTION_REACTIONS.list);
   }
 
   if (isUsageHelpIntent(userText)) {
-    return buildUsageHelpMessage();
+    return buildWhatsAppResponsePayload(buildUsageHelpMessage(), '💰');
   }
 
   const usagePeriod = detectUsageSummaryPeriod(userText);
   if (usagePeriod) {
     const summary = await getUsageSummary(usagePeriod);
     const prioritizeWhatsApp = normalizeText(userText).includes('whatsapp');
-    return buildUsageSummaryMessage(summary, { prioritizeWhatsApp });
+    return buildWhatsAppResponsePayload(
+      buildUsageSummaryMessage(summary, { prioritizeWhatsApp }),
+      '💰'
+    );
   }
 
   const agendaListIntent = detectAgendaListIntent(userText);
   if (agendaListIntent) {
-    return buildAgendaIntentMessage(tasks, agendaListIntent.date);
+    return buildWhatsAppResponsePayload(
+      buildAgendaIntentMessage(tasks, agendaListIntent.date),
+      ACTION_REACTIONS.list
+    );
   }
 
   if (isAcknowledgementIntent(userText)) {
-    return ensureWhatsAppResponseStyle('Perfeito, senhor.', {
-      question: 'Precisa de mais alguma coisa agora, senhor?',
-    });
+    return buildWhatsAppResponsePayload(
+      ensureWhatsAppResponseStyle('Perfeito, senhor.', {
+        question: 'Precisa de mais alguma coisa agora, senhor?',
+      }),
+      ACTION_REACTIONS.default
+    );
   }
 
   const quickOperational = inferQuickOperationalActions(userText);
@@ -3711,12 +3781,16 @@ ${agendaContext}`;
 
   if (!parsed) {
     try {
-      const contextMessages = likelyMutatingIntent
-        ? []
-        : getWhatsAppConversationContext(senderNumber);
+      if (senderNumber) {
+        addWhatsAppConversationMessage(senderNumber, 'user', userPayload);
+      }
+      const contextMessages = getWhatsAppConversationContext(senderNumber);
+      const messagesForModel = contextMessages.length > 0
+        ? contextMessages
+        : [{ role: 'user', content: userPayload }];
       const raw = await callOpenAI(
         prompt,
-        [...contextMessages, { role: 'user', content: userPayload }],
+        messagesForModel,
         WHATSAPP_AGENT_MAX_TOKENS,
         {
           model: WHATSAPP_MODEL,
@@ -3831,7 +3905,10 @@ ${agendaContext}`;
   }
 
   if (exec.blockedBySelection) {
-    return ensureWhatsAppResponseStyle(exec.changes.join('\n\n'));
+    return buildWhatsAppResponsePayload(
+      ensureWhatsAppResponseStyle(exec.changes.join('\n\n')),
+      '❓'
+    );
   }
 
   const responseParts = [];
@@ -3847,10 +3924,13 @@ ${agendaContext}`;
   }
 
   const finalResponse = ensureWhatsAppResponseStyle(responseParts.join('\n\n'));
-  if (!mutatingIntent && !hasMutatingActions) {
-    saveWhatsAppConversationTurn(senderNumber, userPayload, finalResponse);
+  if (senderNumber && finalResponse) {
+    addWhatsAppConversationMessage(senderNumber, 'assistant', finalResponse);
   }
-  return finalResponse;
+  return buildWhatsAppResponsePayload(
+    finalResponse,
+    inferWhatsAppReaction(actions, { hasListOutput: exec.listOutputs.length > 0 })
+  );
 }
 
 function startWhatsAppAgent() {
